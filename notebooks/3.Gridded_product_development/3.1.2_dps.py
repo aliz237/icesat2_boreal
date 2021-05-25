@@ -184,6 +184,8 @@ def main():
     parser.add_argument("-j", "--json_path", type=str, default=None, help="The path to the S3 bucket")
     args = parser.parse_args()    
 
+    # EXAMPLE CALL
+    # python 3.1.2_dps.py -i /projects/maap-users/alexdevseed/boreal_tiles.gpkg -n 30543 -l boreal_tiles_albers  -o /projects/tmp/Landsat/ -b 0 -a https://landsatlook.usgs.gov/sat-api
     geojson_path_albers = args.in_tile_fn
     print('geopkg path = ', geojson_path_albers)
     tile_n = args.in_tile_num
@@ -211,7 +213,7 @@ def main():
     json_files = [file for file in os.listdir(args.output_dir) if f'local-s3-{tile_n}' in file]
     
     print(json_files)
-    '''
+    
     blue_bands = GetBandLists(json_files, geojson_dir, 2)
     green_bands = GetBandLists(json_files, geojson_dir, 3)
     red_bands = GetBandLists(json_files, geojson_dir, 4)
@@ -302,8 +304,7 @@ def main():
     out_file = os.path.join(outdir, 'Landsat8_' + str(tile_n) + '_comp_cog_2015-2020_dps.tif')
     
     # write COG to disk
-    write_cog(stack, out_file, in_crs, crs_transform, bandnames, out_crs=out_crs, resolution=(res, res))
-'''    
+    write_cog(stack, out_file, in_crs, crs_transform, bandnames, out_crs=out_crs, resolution=(res, res))    
 
 if __name__ == "__main__":
     main()

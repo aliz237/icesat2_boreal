@@ -1,44 +1,45 @@
 #! /usr/bin/env python
 
-import sys
-import json
+#import sys
+#import json
 import os
-from pprint import pprint
-from osgeo import gdal
+#from pprint import pprint
+#from osgeo import gdal
 import boto3
 
-import matplotlib.pyplot as plt
-from matplotlib.pyplot import imshow
+#import matplotlib.pyplot as plt
+#from matplotlib.pyplot import imshow
 import numpy as np
-import numpy.ma as ma
-from pyproj import Proj, Transformer
+#import numpy.ma as ma
+#from pyproj import Proj, Transformer
 
 import geopandas as gpd
-import shapely as shp
-import folium
-from shapely.geometry import box
-from fiona.crs import from_epsg
+#import shapely as shp
+#from shapely.geometry import box
+#from fiona.crs import from_epsg
 
 import rasterio as rio
-from rasterio.transform import Affine
+#from rasterio.transform import Affine
 from rasterio.session import AWSSession 
-from rasterio.plot import show
-from rasterio.mask import mask
+#from rasterio.plot import show
+#from rasterio.mask import mask
 from rasterio.warp import * #TODO: limit to specific needed modules
 from rasterio.merge import merge
-from rasterio import windows
+#from rasterio import windows
 from rasterio.crs import CRS
 
 import argparse
 
-from maap.maap import MAAP
-maap = MAAP()
+#from maap.maap import MAAP
+#maap = MAAP()
 
 from CovariateUtils import write_cog, get_index_tile
 from CovariateUtils_topo import *
 
 def main():
-    
+    '''Command line script to create topo stacks by vector tile id.
+    example cmd line call: python 3.1.5_dps.py --in_tile_fn '/projects/maap-users/alexdevseed/boreal_tiles.gpkg' --in_tile_num 18822 --tile_buffer_m 120 --in_tile_layer "boreal_tiles_albers" -o '/projects/tmp/Topo/'
+    '''
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--in_tile_fn", type=str, help="The input filename of a set of vector tiles that will define the bounds for stack creation")
     parser.add_argument("-n", "--in_tile_num", type=int, help="The id number of an input vector tile that will define the bounds for stack creation")
