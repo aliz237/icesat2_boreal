@@ -4,41 +4,42 @@
 import requests
 import datetime
 import geopandas as gpd
-import folium
-import shapely as shp
+#import folium
+#import shapely as shp
 
 import json
 import os
-import boto3
+#import boto3
 import numpy as np
-import matplotlib
-import matplotlib.pyplot as plt
-import sys
-import tarfile
+#import matplotlib
+#import matplotlib.pyplot as plt
+#import sys
+#import tarfile
 
 
-from rasterio import enums
-from rasterio.warp import array_bounds, calculate_default_transform
-from rio_tiler.utils import create_cutline
-from rio_cogeo.cogeo import cog_translate
+#from rasterio import enums
+#from rasterio.warp import array_bounds, calculate_default_transform
+#from rio_tiler.utils import create_cutline
+#from rio_cogeo.cogeo import cog_translate
 
 import rasterio as rio
-from rasterio.mask import mask
+#from rasterio.mask import mask
 from rasterio.warp import *
-from rasterio.merge import merge
-from rasterio.crs import CRS
-from rasterio import windows
-from rasterio.session import AWSSession
-from rasterio.io import MemoryFile
-from rasterio.transform import from_bounds
-from rio_cogeo.cogeo import cog_translate
-from rio_cogeo.profiles import cog_profiles
-from rasterio.vrt import WarpedVRT
-from rasterio.plot import show
-from shapely.geometry import box
-from fiona.crs import from_epsg
+#from rasterio.merge import merge
+#from rasterio.crs import CRS
+#from rasterio import windows
+#from rasterio.session import AWSSession
+#from rasterio.io import MemoryFile
+#from rasterio.transform import from_bounds
+#from rio_cogeo.profiles import cog_profiles
+#from rasterio.vrt import WarpedVRT
+#from rasterio.plot import show
+#from shapely.geometry import box
+#from fiona.crs import from_epsg
 
 from CovariateUtils import get_index_tile
+
+import itertools
 
 def write_local_data_and_catalog_s3(catalog, bands, save_path):
     '''Given path to a response json from a sat-api query, make a copy changing urls to local paths'''
@@ -50,12 +51,9 @@ def write_local_data_and_catalog_s3(catalog, bands, save_path):
             #download the assests
             for band in bands:
                 try:
-                    key = feature['assets'][f'SR_{band}.TIF']['href'].replace(
-                        'https://landsatlook.usgs.gov/data/',
-                        '')
-                    output_file = os.path.join(
-                        f's3://maap-ops-dataset/alexdevseed/landsat8/sample2/{feature["id"]}/'
-                        , os.path.basename(key))
+                    pass
+                    key = feature['assets'][f'SR_{band}.TIF']['href'].replace('https://landsatlook.usgs.gov/data/','')
+                    output_file = os.path.join(f's3://maap-ops-dataset/maap-users/alexdevseed/landsat8/sample2/{feature["id"][:-3]}/', os.path.basename(key))
                     #print(key)
                     ## Uncomment next line to actually download the data as a local sample
                     #s3.Bucket('usgs-landsat').download_file(key, output_file, ExtraArgs={'RequestPayer':'requester'})
@@ -98,9 +96,9 @@ def query_year(year, bbox, min_cloud, max_cloud, api):
     "bbox":bbox,
     "query": {
         "collections": ["landsat-c2l2-sr"],
-        "eo:platform": {"eq": "LANDSAT_8"},
+        "platform": {"in": ["LANDSAT_8"]},
         "eo:cloud_cover": {"gte": min_cloud, "lt": max_cloud},
-        "landsat:collection_category":{"eq": "T1"}
+        "landsat:collection_category":{"in": ["T1"]}
         },
     "limit": 20 # We limit to 500 items per Page (requests) to make sure sat-api doesn't fail to return big features collection
     }
@@ -109,9 +107,12 @@ def query_year(year, bbox, min_cloud, max_cloud, api):
     
     return data
 
+def read_json(json_file):
+    with open(json_file) as f:
+        response = json.load(f)
+    return response
 
-
-def get_data(in_tile_fn, in_tile_layer, in_tile_num, out_dir, sat_api):
+def get_data(in_tile_fn, in_tile_layer, in_tile_num, out_dir, sat_api, local=False):
 
 
     #geojson_path_albers = "/projects/maap-users/alexdevseed/boreal_tiles.gpkg"
@@ -133,28 +134,42 @@ def get_data(in_tile_fn, in_tile_layer, in_tile_num, out_dir, sat_api):
         # Geojson of total scenes - Change to list of scenes
         response_by_year = [query_year(year, bbox, min_cloud, max_cloud, api) for year in years]
         scene_totals = [each['meta']['found'] for each in response_by_year]
-        print(scene_totals)
+        print('scene total: ', scene_totals)
     
     # Take the search over several years, write the geojson response for each
     ## TODO: need unique catalog names that indicate bbox tile, and time range used.
     save_path = out_dir
     if (not os.path.isdir(save_path)): os.mkdir(save_path)
-    catalogs = []
-    for yr in range(0,len(years)):
-        catalog = os.path.join(save_path, f'response-{tile_n}-{years[yr]}.json')
-        with open(catalog, 'w') as jsonfile:
-            json.dump(response_by_year[yr], jsonfile)
-            catalogs.append(catalog)
+    #catalogs = []
+    #for yr in range(0,len(years)):
+    #    catalog = os.path.join(save_path, f'response-{tile_n}-{years[yr]}.json')
+    #    with open(catalog, 'w') as jsonfile:
+    #        json.dump(response_by_year[yr], jsonfile)
+    #        catalogs.append(catalog)
+     
+    #local_catalogs = [write_local_data_and_catalog_s3(catalog, bands, save_path) for catalog in catalogs]
 
-    # create local versions
-    bands = [''.join(["B",str(item)])for item in range(2,8,1)]     
-    local_catalogs = [write_local_data_and_catalog_s3(catalog, bands, save_path) for catalog in catalogs]
-
-    yr = 5
-    scenes_poly = gpd.GeoDataFrame.from_features(response_by_year[yr], crs='epsg:4326')
-    for col in scenes_poly.columns: print(col)
+    #json_files = [os.path.join(save_path, file) for file in os.listdir(save_path) if f'locals3-{tile_n}' in file]
     
-    return True
+    #print(json_files)
+    #master_catalogs = [read_json(jf) for jf in json_files]
+
+    merge_catalogs = {
+        "type": "FeatureCollection",
+        "features": list(itertools.chain.from_iterable([f["features"] for f in response_by_year])),
+    }
+        
+    master_json = os.path.join(save_path, f'master-{tile_n}-{np.min(years)}-{np.max(years)}.json')
+    with open(master_json, 'w') as outfile:
+            json.dump(merge_catalogs, outfile)
+            
+    # If local True, rewrite the s3 paths to internal not public buckets
+    if local==True:
+        # create local versions, only for the bands we use currently
+        bands = [''.join(["B",str(item)])for item in range(2,8,1)]
+        master_json = write_local_data_and_catalog_s3(master_json, bands, save_path)
+    
+    return master_json
         
 
         
