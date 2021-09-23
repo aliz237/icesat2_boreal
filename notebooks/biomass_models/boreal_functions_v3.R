@@ -34,22 +34,50 @@ GEDI2AT08AGB<-function(rds_models,models_id,ice2_30_atl08_path, offset=100){
   # read table
   xtable<-read.table(ice2_30_atl08_path, sep=",", head=T)
   xtable_i<-na.omit(as.data.frame(xtable))
-  names(xtable_i)[1:12]<-c("lon","lat","RH_25","RH_50","RH_60","RH_70","RH_75","RH_80","RH_90","RH_95","RH_98")
+  names(xtable_i)[1:11]<-c("lon","lat","RH_25","RH_50","RH_60","RH_70","RH_75","RH_80","RH_90","RH_95","RH_98")
   
   #
-  xtable_sqrt<-sqrt(xtable_i[3:11])
-  names(xtable_sqrt)<-paste0("sqrt(",names(xtable_sqrt),")")
+  xtable_sqrt<-xtable_i[3:11]+offset
+  #names(xtable_sqrt)<-paste0("sqrt(",names(xtable_sqrt),")")
   #xtable_sqrt<-cbind(xtable_i,xtable_sqrt)
-  xtable_sqrt<-xtable_i
-  xtable_sqrt[,3:13]<-xtable_sqrt[,3:11]+offset
+  #xtable_sqrt<-xtable_i
+  #xtable_sqrt[,3:12]<-xtable_sqrt[,3:12]
   
   # get unique ids
-  ids<-unique(xtable_sqrt$model_id)
 
   # apply models by id
   xtable_sqrt$AGB<-NA
   xtable_sqrt$SE<-NA
-  
+    
+  #Assign model id based on landcover
+
+    # 1 = DBT trees (boreal-wide), 2=Evergreen needleleaf trees (boreal-wide), 12 = boreal-wide all PFT
+    
+    # for the seg_landcov: {0: "water", 1: "evergreen needleleaf forest", 2: "evergreen broadleaf forest", \ 3: "deciduous needleleaf forest", 4: "deciduous broadleaf forest", \ 5: "mixed forest", 6: "closed shrublands", 7: "open shrublands", \ 8: "woody savannas", 9: "savannas", 10: "grasslands", 11: "permanent wetlands", \ 12: "croplands", 13: "urban-built", 14: "croplands-natural mosaic", \ 15: "permanent snow-ice", 16: "barren"})
+    
+    xtable_sqrt$model_id <- NA
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==0] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==1] <- 4
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==2] <- 4
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==3] <- 1
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==4] <- 1
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==5] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==6] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==7] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==8] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==9] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==10] <-12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==11] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==12] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==13] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==14] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==15] <- 12
+    xtable_sqrt$model_id[xtable_sqrt$seg_landcov==16] <- 12
+
+  xtable_sqrt$model_id<-names(rds_models)[1]
+  ids<-unique(xtable_sqrt$model_id)
+
+    
   #i=ids[1]
   for ( i in ids){
     
@@ -69,11 +97,12 @@ GEDI2AT08AGB<-function(rds_models,models_id,ice2_30_atl08_path, offset=100){
     C <- mean(model_i$fitted.values)/mean(model_i$model$`sqrt(AGBD)`)
     
     #we multiply by C in case there is a systematic over or under estimation in the model (bias correction)
-    xtable_sqrt$AGB[xtable_sqrt$model_id==i]<-C*xtable_sqrt$AGB[xtable_sqrt$model_id==i]^2
+    xtable_sqrt$AGB[xtable_sqrt$model_id==i]<-C*(xtable_sqrt$AGB[xtable_sqrt$model_id==i]^2)
     #print(head(xtable_sqrt$AGB[xtable_sqrt$model_id==i]))
   }
-  xtable2<-xtable_sqrt[,c(names(xtable_i),"AGB","SE")]
-  colnames(xtable2)[3:12]<-colnames(xtable)[3:12]
+  xtable2<-cbind(xtable, xtable_sqrt$AGB, xtable_sqrt$SE)#[,c(names(xtable_i),"AGB","SE")]
+    ncol <- ncol(xtable2)
+  colnames(xtable2)[(ncol-1):ncol]<-c('AGB', 'SE')
   return(xtable2)
 }
 
@@ -153,7 +182,7 @@ agbModelingMapping<-function(x=x,y=y,se=NULL,s_train=70, rep=10,stack=stack,stra
   pb <- txtProgressBar(min = 0, max = rep, style = 3)
   
   stats_df<-NULL
-  n<-length(x)
+  n<-nrow(x)
   ids<-1:n
   map_pred<-NULL
   
@@ -167,17 +196,15 @@ agbModelingMapping<-function(x=x,y=y,se=NULL,s_train=70, rep=10,stack=stack,stra
   i.s=0
   #j=1
   
-  for ( j in 1:rep){
+  for (j in 1:rep){
     i.s<-i.s+1
     setTxtProgressBar(pb, i.s)
-    
     set.seed(j)
     if ( strat_random==TRUE){
       trainRowNumbers<-stratRandomSample(agb=y,breaks=quantile(y, na.rm=T), p=s_train/100)
     } else {
       trainRowNumbers<-sort(sample(ids,round(n*s_train/100), T))
     }
-    
     # Step 2: Create the training  dataset
     # select % of data to training and testing the models
     trainData.x <- x[trainRowNumbers,]
@@ -205,34 +232,41 @@ agbModelingMapping<-function(x=x,y=y,se=NULL,s_train=70, rep=10,stack=stack,stra
     
     # mapping
     #map_i<-cbind(stack_df[,1:2],agb=predict(fit.rf, newdata=stack_df[,varnames]), rep=i)
-    map_i<-cbind(stack_df[,1:2],agb=predict(fit.rf, newdata=stack_df), rep=j, grid_id=stack_df$grid_id)
-    map_pred<-rbind(map_pred,map_i)
+    map_i<-cbind(stack_df[,1:2],agb=predict(fit.rf, newdata=stack_df), PI=predict(fit.rf, newdata=stack_df, interval='predict', CI=predict(fit.rf, newdata=stack_df, interval='confidence'), rep=j, grid_id=stack_df$grid_id)
+    #map_pred<-rbind(map_pred,map_i)
     
   }
   
   
-  mean_map<-tapply(map_pred$agb,map_pred$grid_id,mean)
-  sd_map<-tapply(map_pred$agb,map_pred$grid_id,sd)
+  #mean_map<-tapply(map_pred$agb,map_pred$grid_id,mean)
+  #sd_map<-tapply(map_pred$agb,map_pred$grid_id,sd)
   
   
-  agb_maps <- rasterFromXYZ(cbind(stack_df[,1:2],
-                                  agb_mean=mean_map,
-                                  agb_sd=sd_map,
-                                  armse_map_mean=mean(stats_df[stats_df[,3]=="rmse",4]),
-                                  armse_map_sd=sd(stats_df[stats_df[,3]=="rmse",4]),
-                                  
-                                  rrmse_map_mean=mean(stats_df[stats_df[,3]=="rmseR",4]),
-                                  rrmse_map_sd=sd(stats_df[stats_df[,3]=="rmseR",4]),
-                                  
-                                  abias_map_mean=mean(stats_df[stats_df[,3]=="bias",4]),
-                                  abias_map_sd=sd(stats_df[stats_df[,3]=="bias",4]),
-                                  
-                                  rbias_map_mean=mean(stats_df[stats_df[,3]=="bias",4]),
-                                  rbias_map_sd=sd(stats_df[stats_df[,3]=="bias",4]),
-                                  
-                                  r2_map_mean=mean(stats_df[stats_df[,3]=="r2",4]),
-                                  r2_map_sd=sd(stats_df[stats_df[,3]=="r2",4])))
+  #agb_maps <- rasterFromXYZ(cbind(stack_df[,1:2],
+  #                                agb_mean=mean_map,
+  #                                agb_sd=sd_map,
+  #                                armse_map_mean=mean(stats_df[stats_df[,3]=="rmse",4]),
+  #                                armse_map_sd=sd(stats_df[stats_df[,3]=="rmse",4]),
+  #                                
+  #                                rrmse_map_mean=mean(stats_df[stats_df[,3]=="rmseR",4]),
+  #                                rrmse_map_sd=sd(stats_df[stats_df[,3]=="rmseR",4]),
+  #                                
+  #                                abias_map_mean=mean(stats_df[stats_df[,3]=="bias",4]),
+  #                                abias_map_sd=sd(stats_df[stats_df[,3]=="bias",4]),
+  #                                
+  #                                rbias_map_mean=mean(stats_df[stats_df[,3]=="bias",4]),
+  #                                rbias_map_sd=sd(stats_df[stats_df[,3]=="bias",4]),
+  #                                
+  #                                r2_map_mean=mean(stats_df[stats_df[,3]=="r2",4]),
+  #                                r2_map_sd=sd(stats_df[stats_df[,3]=="r2",4])))
   
+    
+    agb_maps <- rasterFromXYZ(cbind(stack_df[,1:2],
+                                   agb_pred=agb,
+                                   agb_CI_low=CI$lwr,
+                                   agb_CI_high=CI$upr,
+                                   agb_PI_low=PI$lwr,
+                                   agb_PI_high=PI$upr))
   close(pb)
   return(agb_maps)
 }
@@ -240,7 +274,7 @@ agbModelingMapping<-function(x=x,y=y,se=NULL,s_train=70, rep=10,stack=stack,stra
 mapBoreal<-function(rds_models,
                     models_id,
                     ice2_30_atl08_path, 
-                    offset=0,
+                    offset=100,
                     s_train=70, 
                     rep=10,
                     stack,
@@ -252,10 +286,11 @@ mapBoreal<-function(rds_models,
                        models_id=models_id,
                        ice2_30_atl08_path=ice2_30_atl08_path, 
                        offset=offset)
-  
-  
+  hist(xtable$AGB)
   # run 
-  maps<-agbModelingMapping(x=xtable[,c(15:18,20:34,36:37)],
+    pred_vars <- c('elevation', 'slope', 'tsri', 'tpi', 'NDVI', 'SAVI', 'MSAVI', 'NDMI', 'EVI', 'NBR', 'NBR2', 'TCW')
+
+maps<-agbModelingMapping(x=xtable[pred_vars],
                            y=xtable$AGB,
                            se=xtable$SE,
                            s_train=s_train,
