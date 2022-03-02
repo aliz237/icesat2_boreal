@@ -14,34 +14,16 @@ pip install --user -r ${basedir}/requirements.txt
 
 mkdir output
 
-FILENAMELIST=($(ls -d input/*gpkg))
-INPUT1="${PWD}/${FILENAMELIST[0]}"
-#INPUT2="${PWD}/${FILENAMELIST[1]}
+FILENAME=$(ls -d input/*)
 
 # This PWD is wherever the job is run (where the .sh is called from) 
 OUTPUTDIR="${PWD}/output"
 
-cmd="python ${basedir}/tile_atl08.py \
---updated_filters \
---extract_covars \
---do_dps \
---do_30m \
--o ${OUTPUTDIR} \
--in_tile_num ${1} \
--in_tile_fn ${INPUT1} \
--in_tile_layer ${2} \
--csv_list_fn ${3} \
--topo_stack_list_fn ${4} \
--landsat_stack_list_fn ${5} \
--years_list ${6} \
--user_stacks ${7} \
--user_atl08 ${8} \
--thresh_sol_el ${9} \
--v_ATL08 ${10} \
--minmonth ${11} \
--maxmonth ${12}"
+#command line call to try for testing
+# python /projects/icesat2_boreal/lib/extract_filter_atl08.py --no-filter-qual --do_30m -i "/projects/test_data/test_data_30m/ATL08_30m_20181014001049_02350102_003_01.h5"
 
-# Print the command to stdout for debugging
-echo ${cmd}
-# Run the command
-eval ${cmd}
+cmd="python ${basedir}/extract_filter_atl08.py --i ${FILENAME} --no-filter-qual --do_30m -o output/"
+
+echo $cmd
+eval $cmd
+
