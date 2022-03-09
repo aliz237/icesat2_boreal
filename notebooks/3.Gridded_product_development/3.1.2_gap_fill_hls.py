@@ -240,38 +240,19 @@ def get_pixel_coords(arr, transform):
     
     return Xgeo, Ygeo
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--in_tile_fn", type=str, help="The filename of the stack's set of vector tiles")
-    parser.add_argument("-n", "--in_tile_num", type=int, help="The id of a tile that will define the bounds of the raster stacking")
-    parser.add_argument("-o", "--output_dir", type=str, help="The path for the JSON files to be written")
-    parser.add_argument("-b", "--tile_buffer_m", type=float, default=0, help="The buffer size (m) applied to the extent of the specified stack tile")
-    parser.add_argument("-r", "--res", type=int, default=30, help="The output resolution of the stack")
-    parser.add_argument("-lyr", "--in_tile_layer", type=str, default=None, help="The layer name of the stack tiles dataset")
-    parser.add_argument("-a", "--sat_api", type=str, default="https://landsatlook.usgs.gov/sat-api", help="URL of USGS query endpoint")
-    parser.add_argument("-j", "--json_file", type=str, default=None, help="The S3 path to the query response json")
-    parser.add_argument("-l", "--local", type=bool, default=False, help="Dictate whether it is a run using local paths")
-    parser.add_argument("-sy", "--start_year", type=str, default="2020", help="specify the start year date (e.g., 2020)")
-    parser.add_argument("-ey", "--end_year", type=str, default="2021", help="specify the end year date (e.g., 2021)")
-    parser.add_argument("-smd", "--start_month_day", type=str, default="06-01", help="specify the start month and day (e.g., 06-01)")
-    parser.add_argument("-emd", "--end_month_day", type=str, default="09-15", help="specify the end month and day (e.g., 09-15)")
-    parser.add_argument("-mc", "--max_cloud", type=int, default=40, help="specify the max amount of cloud")
-    parser.add_argument("-t", "--composite_type", type=str, default='HLS', help="specify the composite type (e.g., HLS, ls8, sen2)")
-    args = parser.parse_args()    
-    
-    print(args.start_month_day)
+def build_backfill_composite_HLS(in_tile_fn, in_tile_num, resolution, tile_buffer_m, in_tile_layer, out_dir, comp_type, sat_api, start_year, end_year, start_month_day, end_month_day, max_cloud, local_json=None)
 
     # EXAMPLE CALL
     # python 3.1.2_dps.py -i /projects/maap-users/alexdevseed/boreal_tiles.gpkg -n 30543 -l boreal_tiles_albers  -o /projects/tmp/Landsat/ -b 0 -a https://landsatlook.usgs.gov/sat-api
-    geojson_path_albers = args.in_tile_fn
+    geojson_path_albers = in_tile_fn
     print('geopkg path = ', geojson_path_albers)
-    tile_n = args.in_tile_num
+    tile_n = in_tile_num
     print("tile number = ", tile_n)
-    res = args.res
+    res = resolution
     print("output resolution = ", res)
     
     # Get tile by number form GPKG. Store box and out crs
-    tile_id = get_index_tile(geojson_path_albers, tile_n, args.tile_buffer_m, layer = args.in_tile_layer)#layer = "boreal_tiles_albers"
+    tile_id = get_index_tile(geojson_path_albers, tile_n, tile_buffer_m, layer = in_tile_layer)#layer = "boreal_tiles_albers"
     #in_bbox = tile_id['bbox_4326']
     in_bbox = tile_id['geom_orig_buffered'].bounds.iloc[0].to_list()
     out_crs = tile_id['tile_crs']
@@ -289,34 +270,35 @@ def main():
     # -a is the link to the api to search for data (needs -o to fetch the json files from at_api)
     
     # TODO: Change this section to be able to read JSON files from S3
-    if args.json_file == None:
-        if args.output_dir == None:
+    if local_json == None:
+        if out_dir == None:
             print("MUST SPECIFY -o FOR JSON PATH")
             os._exit(1)
-        elif args.composite_type == 'HLS':
+        elif comp_type == 'HLS':
             print("get HLS data")
-            master_json = get_HLS_data(args.in_tile_fn, args.in_tile_layer, args.in_tile_num, args.output_dir, args.sat_api, args.start_year, args.end_year, args.start_month_day, args.end_month_day, args.max_cloud, args.local)
-        elif args.composite_type == 'LS8':
+            master_json = get_HLS_data(in_tile_fn, in_tile_layer, in_tile_num, output_dir, sat_api, start_year, end_year, start_month_day, end_month_day, max_cloud, local_json)
+        elif composite_type == 'LS8':
             print("get ls8 data")
-            master_json = get_ls8_data(args.in_tile_fn, args.in_tile_layer, args.in_tile_num, args.output_dir, args.sat_api, args.start_year, args.end_year, args.start_month_day, args.end_month_day, args.max_cloud, args.local)
+            master_json = get_ls8_data(in_tile_fn, in_tile_layer, in_tile_num, output_dir, sat_api, start_year, end_year, start_month_day, end_month_day, max_cloud, local_json)
         else:
             print("specify the composite type (HLS, LS8)")
             os._exit(1)
     else:
-        master_json = args.json_file
+        print("no json file")
+        
     
     
-    blue_bands = GetBandLists(master_json, 2, args.composite_type)
+    blue_bands = GetBandLists(master_json, 2, comp_type)
     print("Number of files per band =", len(blue_bands))
     print(blue_bands[0])
     
-    green_bands = GetBandLists(master_json, 3, args.composite_type)
-    red_bands = GetBandLists(master_json, 4, args.composite_type)
-    nir_bands = GetBandLists(master_json, 5, args.composite_type)
-    swir_bands = GetBandLists(master_json, 6, args.composite_type)
-    swir2_bands = GetBandLists(master_json, 7, args.composite_type)
-    if args.composite_type=='HLS':
-        fmask_bands = GetBandLists(master_json, 8, args.composite_type)
+    green_bands = GetBandLists(master_json, 3, comp_type)
+    red_bands = GetBandLists(master_json, 4, comp_type)
+    nir_bands = GetBandLists(master_json, 5, comp_type)
+    swir_bands = GetBandLists(master_json, 6, comp_type)
+    swir2_bands = GetBandLists(master_json, 7, comp_type)
+    if comp_type=='HLS':
+        fmask_bands = GetBandLists(master_json, 8, comp_type)
     
     print("Number of files per band =", len(blue_bands))
     #print(blue_bands[0])
@@ -326,11 +308,11 @@ def main():
     ## Loopsover lists of bands and calculates NDVI
     ## creates a new list of NDVI images, one per input scene
     print('Creating NDVI stack...')
-    print(args.composite_type)
+    print(comp_type)
     # insert AWS credentials here if needed
-    if args.composite_type == 'HLS':
+    if comp_type == 'HLS':
         aws_session = get_aws_session_DAAC()
-    elif args.composite_type == 'LS8':
+    elif comp_type == 'LS8':
         aws_session = get_aws_session()
     else:
         print("specify the composite type (HLS, ls8)")
@@ -340,12 +322,12 @@ def main():
     
     # Start reading data: TO DO: nmt28 - edit so it can use comp_type
     with rio.Env(aws_session):
-        in_crs, crs_transform = MaskArrays(red_bands[0], in_bbox, height, width, args.composite_type, out_crs, out_crs, incl_trans=True)
+        in_crs, crs_transform = MaskArrays(red_bands[0], in_bbox, height, width, comp_type, out_crs, out_crs, incl_trans=True)
         print(in_crs)
-        if args.composite_type=='HLS':
-            NDVIstack = [CreateNDVIstack_HLS(red_bands[i],nir_bands[i],fmask_bands[i], in_bbox, out_crs, out_crs, height, width, args.composite_type) for i in range(len(red_bands))]
-        elif args.composite_type=='LS8':
-            NDVIstack = [CreateNDVIstack_LS8(red_bands[i],nir_bands[i], in_bbox, out_crs, out_crs, height, width, args.composite_type) for i in range(len(red_bands))]
+        if comp_type=='HLS':
+            NDVIstack = [CreateNDVIstack_HLS(red_bands[i],nir_bands[i],fmask_bands[i], in_bbox, out_crs, out_crs, height, width, comp_type) for i in range(len(red_bands))]
+        elif comp_type=='LS8':
+            NDVIstack = [CreateNDVIstack_LS8(red_bands[i],nir_bands[i], in_bbox, out_crs, out_crs, height, width, comp_type) for i in range(len(red_bands))]
         
         print('finished')
     
@@ -374,23 +356,23 @@ def main():
     # create band-by-band composites
     with rio.Env(aws_session):
         print('Creating Blue Composite')
-        BlueComp = CreateComposite(blue_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, args.composite_type)
+        BlueComp = CreateComposite(blue_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, comp_type)
         print('Creating Green Composite')
-        GreenComp = CreateComposite(green_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, args.composite_type)
+        GreenComp = CreateComposite(green_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, comp_type)
         print('Creating Red Composite')
-        RedComp = CreateComposite(red_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, args.composite_type)
+        RedComp = CreateComposite(red_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, comp_type)
         print('Creating NIR Composite')
-        NIRComp = CreateComposite(nir_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, args.composite_type)
+        NIRComp = CreateComposite(nir_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, comp_type)
         print('Creating SWIR Composite')
-        SWIRComp = CreateComposite(swir_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, args.composite_type)
+        SWIRComp = CreateComposite(swir_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, comp_type)
         print('Creating SWIR2 Composite')
-        SWIR2Comp = CreateComposite(swir2_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, args.composite_type)
+        SWIR2Comp = CreateComposite(swir2_bands, NDVItmp, BoolMask, in_bbox, height, width, out_crs, out_crs, comp_type)
         print('Creating NDVI Composite')
         NDVIComp = CollapseBands(NDVIstack, NDVItmp, BoolMask)
-        if args.composite_type == 'HLS':
+        if comp_type == 'HLS':
             print('Creating Julian Date Comp')
             JULIANcomp = JulianCompositeHLS(swir2_bands, NDVItmp, BoolMask, height, width)
-        elif args.composite == 'LS8':
+        elif comp_type == 'LS8':
             JULIANcomp = JulianComposite(swir2_bands, NDVItmp, BoolMask, height, width)
     
     # calculate covars
@@ -420,47 +402,17 @@ def main():
     bandnames = ['Blue', 'Green', 'Red', 'NIR', 'SWIR', 'SWIR2', 'NDVI', 'SAVI', 'MSAVI', 'NDMI', 'EVI', 'NBR', 'NBR2', 'TCB', 'TCG', 'TCW', 'ValidMask', 'Xgeo', 'Ygeo', 'JulianDate']
     print("specifying output directory and filename")
     #outdir = '/projects/tmp/Landsat'
-    outdir = args.output_dir
-    start_season = args.start_month_day[0:2] + args.start_month_day[2:]
-    end_season = args.end_month_day[0:2] + args.end_month_day[2:]
-    start_year = args.start_year
-    end_year = args.end_year
-    comp_type = args.composite_type
+    outdir = output_dir
+    start_season = start_month_day[0:2] + start_month_day[2:]
+    end_season = end_month_day[0:2] + end_month_day[2:]
+    start_year = start_year
+    end_year = end_year
+    comp_type = composite_type
     out_stack_fn = os.path.join(outdir, comp_type + '_' + str(tile_n) + '_' + start_season + '_' + end_season + '_' + start_year + '_' + end_year + '.tif')
-    
-    # write COG to disk
-    write_cog(stack, 
-              out_stack_fn, 
-              in_crs, 
-              crs_transform, 
-              bandnames, 
-              out_crs=out_crs, 
-              resolution=(res, res)
-             )
     
     return(out_stack_fn)
     
-if __name__ == "__main__":
-    '''
-    
-    if args.back_fill == True:
-        start_year = 2019
-        end_year = 2019
-        start_month_day = '06-01'
-        end_month_day = '09-15'
-        max_cloud = 40
-        
-        build_backfill_composite_HLS(geojson_path_albers, tile_n, res, args.tile_buffer_m, args.in_tile_layer, outdir, comp_type, sat_api, start_year, end_year, start_month_day, end_month_day, max_cloud, args.local)
-    
-    
-    Example call:
-    python 3.1.2_dps.py -i /projects/shared-buckets/nathanmthomas/boreal_tiles.gpkg -n 30543 -lyr boreal_tiles_albers  -o /projects/tmp/Landsat/ -b 0 -a https://landsatlook.usgs.gov/sat-api -l False --tile_buffer_m 0
-    
-    python 3.1.2_dps.py -i /projects/shared-buckets/nathanmthomas/boreal_grid_albers90k_gpkg.gpkg -n 3013 -lyr grid_boreal_albers90k_gpkg  -o /projects/tmp/Landsat/TC_test -a https://landsatlook.usgs.gov/sat-api --tile_buffer_m 0 -sy 2020 -ey 2021 -smd 06-01 -emd 09-15 -mc 40 -t LS8
-    
-    python 3.1.2_dps.py -i /projects/shared-buckets/nathanmthomas/boreal_tiles_v002.gpkg -n 3013 -lyr boreal_tiles_v002 -o /projects/tmp/Landsat/TC_test -a https://cmr.earthdata.nasa.gov/stac/LPCLOUD --tile_buffer_m 0 -sy 2020 -ey 2021 -smd 06-01 -emd 09-15 -mc 40 -t HLS
-    '''
-    main()
+
     
     
 
