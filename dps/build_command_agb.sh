@@ -3,7 +3,7 @@ set -x
 basedir=$( cd "$(dirname "$0")" ; pwd -P )
 
 #install requirements packages
-conda env update -f ${basedir}/above_env_r_3.1.4.yml
+conda env -f ${basedir}/above_env_r_3.1.4.yml
 
 pushd ${HOME}
 
@@ -13,7 +13,7 @@ source activate icesat2_boreal
 # needed for ee asset export
 #mamba install --name icesat2_boreal -c conda-forge earthengine-api
 
-pip install git+https://github.com/MAAP-Project/maap-py.git#egg=maappy
+pip install git+https://github.com/MAAP-Project/maap-py.git@v4.1.0
 
 source activate r
 pip3 install pyOpenSSL --upgrade
