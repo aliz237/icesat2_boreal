@@ -3,7 +3,7 @@ set -x
 basedir=$( cd "$(dirname "$0")" ; pwd -P )
 
 #install requirements packages
-conda env -f ${basedir}/above_env_r_3.1.4.yml
+conda env create -f ${basedir}/above_env_r_3.1.4.yml
 
 pushd ${HOME}
 
