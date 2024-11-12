@@ -26,7 +26,7 @@
 ####  COGs of predicted 30-m AGBD, SD AGBD
 
 library(optparse)
-library(randomForest)
+library(ranger)
 library(dplyr)
 library(fs)
 library(stringr)
@@ -289,10 +289,11 @@ write_ATL08_table <- function(target, df, out_file_path){
 
 write_single_model_summary <- function(model, df, target, out_fns){
   target <- if(target == 'AGB') df$AGB else df$RH_98
-  local_model <- lm(model$predicted ~ target)
+
+  local_model <- lm(model$predictions ~ target)
   saveRDS(model, file=out_fns['model'])
 
-  rsq <- max(model$rsq, na.rm=T)
+  rsq <- max(model$r.squared, na.rm=T)
   cat('rsq_model: ', rsq, '\n')
 
   rsq_local <- summary(local_model)$r.squared
@@ -305,8 +306,9 @@ write_single_model_summary <- function(model, df, target, out_fns){
 
   cat('rmse_local: ', rmse_local, '\n')
 
-  imp_vars <- model$importance
-  out_accuracy <- list(rsq_local, rmse_local, imp_vars)
+  out_accuracy <- list(
+    RSQ=rsq_local, RMSE=rmse_local, importance=model$variable.importance
+  )
   saveRDS(out_accuracy, file=out_fns['stats'])
 }
 
@@ -529,7 +531,7 @@ run_uncertainty_calculation <- function(fixed_modeling_pipeline_params, uncertai
 
   params <- modifyList(
     fixed_modeling_pipeline_params,
-    list(max_samples=1000, randomize=TRUE, model_config=list(ntree=250))
+    list(max_samples=1000, randomize=TRUE, model_config=list(num.ntrees=250))
   )
 
   while(sd_diff > sd_thresh && this_iter < uncertainty_iterations){
@@ -644,12 +646,14 @@ mapBoreal<-function(atl08_path, broad_path, hls_path, topo_path, lc_path, boreal
     rds_models=get_rds_models(), all_train_data=all_train_data, boreal_poly=boreal_poly,
     pred_vars=pred_vars, predict_var=predict_var, stack=stack,
     summary_and_convert_functions=get_summary_and_convert_functions(predict_var),
-    model=randomForest, sample=TRUE
+    model=ranger, sample=TRUE
   )
 
   results <- do.call(run_modeling_pipeline, modifyList(
     fixed_modeling_pipeline_params,
-    list(max_samples=max_samples, randomize=FALSE, model_config=list(ntree=500, mtry=6))
+    list(max_samples=max_samples, randomize=FALSE,
+         model_config=list(num.trees=500, mtry=6, importance='impurity')
+         )
   ))
 
   output_fns <- set_output_file_names(predict_var, tile_num, year)
