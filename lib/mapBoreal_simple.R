@@ -531,7 +531,7 @@ run_uncertainty_calculation <- function(fixed_modeling_pipeline_params, uncertai
 
   params <- modifyList(
     fixed_modeling_pipeline_params,
-    list(max_samples=1000, randomize=TRUE, model_config=list(num.ntrees=250))
+    list(max_samples=1000, randomize=TRUE, model_config=list(num.trees=250))
   )
 
   while(sd_diff > sd_thresh && this_iter < uncertainty_iterations){
