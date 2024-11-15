@@ -16,5 +16,5 @@ source activate icesat2_boreal
 pip install git+https://github.com/MAAP-Project/maap-py.git@v4.1.0
 
 source activate r
-conda install -c conda-forge r-optparse -y
+conda install -c conda-forge r-optparse r-ranger -y
 pip3 install pyOpenSSL --upgrade
