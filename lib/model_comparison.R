@@ -1,6 +1,7 @@
 library(optparse)
 #library(randomForest)
 library(ranger)
+library(tidyr)
 library(dplyr)
 library(fs)
 library(stringr)
@@ -381,25 +382,25 @@ setup_kfold <- function(train_df, k) {
 
 validate <- function(model, val_df){
   predictions <- predict(model, val_df)$predictions
-  residuals <- predictions - val_df[['AGB']]
-  
-  RMSE <- sqrt(mean(residuals^2))
-
-  ss_total <- sum((val_df[['AGB']] - mean(val_df[['AGB']]))^2)
-  ss_residuals <- sum(residuals^2)
-  R2 <- 1 - (ss_residuals / ss_total)
-
-  return(list(RMSE=RMSE, R2=R2))
+  val_df$residuals <- predictions - val_df[['AGB']]
+  metrics <- val_df %>%
+    group_by(segment_landcover) %>%
+    summarise(
+      RMSE = sqrt(mean(residuals^2, na.rm = TRUE)),
+      R2 = 1 - (sum(residuals^2, na.rm = TRUE) / sum((AGB - mean(AGB, na.rm = TRUE))^2, na.rm = TRUE))
+    ) %>%
+    ungroup()
+  return(metrics)
 }
 
 run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config,
-                                 max_samples, sample, pred_vars, pred_vars_nosar, predict_var, folds=10){
+                                 max_samples, sample, pred_vars, pred_vars_nosar, predict_var, tile_num, folds=10){
 
   print('creating AGB traing data frame.')
   all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
   df <- setup_kfold(all_train_data_AGB, 10)
   # run a 10-fold CV with and without SAR features
-  results <- list(rmse_sar=c(), r2_sar=c(), rmse_nosar=c(), r2_nosar=c())
+  results <- data.frame()
 
   for (fold in 1:folds) {
     t1 <- Sys.time()
@@ -413,31 +414,32 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
     model_sar <- fit_model(model, model_config, train_df, pred_vars, predict_var)
     print('predicting with SAR')
     result <- validate(model_sar, val_df)
-    cat(sprintf("Fold %d - RMSE: %.4f, R^2: %.4f\n", fold, results[['RMSE']], results[['R2']]))
-    results[['rmse_sar']] <- c(results[['rmse_sar']], result[['RMSE']])
-    results[['r2_sar']] <- c(results[['r2_sar']], result[['R2']])
+    result$predictors <- 'with_sar'
+    result$fold <- fold
+    results <- rbind(results, result)
 
     print('fitting model without SAR')
     model_nosar <- fit_model(model, model_config, train_df, pred_vars_nosar, predict_var)
     print('predicting with SAR')
     result <- validate(model_nosar, val_df)
-    results[['rmse_nosar']] <- c(results[['rmse_nosar']], result[['RMSE']])
-    results[['r2_nosar']] <- c(results[['r2_nosar']], result[['R2']])
-
-    cat(sprintf("Fold %d - RMSE: %.4f, R^2: %.4f\n", fold, results[['RMSE']], results[['R2']]))
-
+    result$predictors <- 'without_sar'
+    result$fold <- fold
+    results <- rbind(results, result)
+    
     t2 <- Sys.time()
     cat('Fold runtime:', difftime(t2, t1, units="mins"), ' (m)\n')
   }
-  final_results <- data.frame(
-    predictors=c('with_sar', 'without_sar'),
-    nfolds=c(folds, folds),
-    RMSE=c(mean(results[['rmse_sar']]), mean(results[['rmse_nosar']])),
-    SD_RMSE=c(sd(results[['rmse_sar']]), sd(results[['rmse_nosar']])),
-    R2=c(mean(results[['r2_sar']]), mean(results[['r2_nosar']])),
-    SD_R2=c(sd(results[['r2_sar']]), sd(results[['r2_nosar']]))
-  )
-  print(final_results)
+
+  final_results <- results |>
+    group_by(segment_landcover, predictors) |>
+    summarise(
+      R2=mean(R2, na.rm=TRUE),
+      RMSE=mean(RMSE, na.rm=TRUE)
+    ) |>
+    ungroup() |>
+    mutate(tile_num=as.integer(tile_num)) |>
+    pivot_wider(names_from = predictors, values_from = c(R2, RMSE))
+
   return(final_results)
 }
 
@@ -484,7 +486,7 @@ mapBoreal<-function(atl08_path, broad_path, boreal_vector_path, year,
   fixed_modeling_pipeline_params <- list(
     rds_models=get_rds_models(), all_train_data=all_train_data,
     pred_vars=pred_vars, pred_vars_nosar=pred_vars_nosar, predict_var=predict_var,
-    model=ranger, sample=TRUE
+    model=ranger, sample=TRUE, tile_num=tile_num
   )
 
   results <- do.call(run_modeling_pipeline, modifyList(
