@@ -351,6 +351,7 @@ prepare_training_data <- function(ice2_30_atl08_path, ice2_30_sample_path,
 
 get_rds_models <- function(){
   rds_model_fns <- list.files(pattern='*.rds')
+  #rds_model_fns <- list.files(path='~/Downloads/bio_models_noground', pattern='*.rds', full.names=TRUE)
   rds_models <- lapply(rds_model_fns, readRDS)
   names(rds_models) <- paste0("m",1:length(rds_models))
   print(rds_models)
@@ -393,7 +394,7 @@ validate <- function(model, val_df){
 }
 
 run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config,
-                                 max_samples, sample, pred_vars, pred_vars_nosar, predict_var, folds=10){
+                                 max_samples, sample, pred_vars, pred_vars_nosar, predict_var, tile_num, folds=10){
 
   print('creating AGB traing data frame.')
   all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
@@ -430,12 +431,15 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
     cat('Fold runtime:', difftime(t2, t1, units="mins"), ' (m)\n')
   }
   final_results <- data.frame(
-    predictors=c('with_sar', 'without_sar'),
-    nfolds=c(folds, folds),
-    RMSE=c(mean(results[['rmse_sar']]), mean(results[['rmse_nosar']])),
-    SD_RMSE=c(sd(results[['rmse_sar']]), sd(results[['rmse_nosar']])),
-    R2=c(mean(results[['r2_sar']]), mean(results[['r2_nosar']])),
-    SD_R2=c(sd(results[['r2_sar']]), sd(results[['r2_nosar']]))
+    tile_num=as.integer(tile_num),
+    RMSE_with_sar_mean=mean(results[['rmse_sar']]),
+    RMSE_with_sar_SD=sd(results[['rmse_sar']]),
+    RMSE_without_sar_mean=mean(results[['rmse_nosar']]),
+    RMSE_without_sar_sd=sd(results[['rmse_nosar']]),
+    R2_with_sar_mean=mean(results[['r2_sar']]),
+    R2_with_sar_SD=sd(results[['r2_sar']]),
+    R2_without_sar_mean=mean(results[['r2_nosar']]),
+    R2_without_sar_SD=sd(results[['r2_nosar']])
   )
   print(final_results)
   return(final_results)
@@ -484,7 +488,7 @@ mapBoreal<-function(atl08_path, broad_path, boreal_vector_path, year,
   fixed_modeling_pipeline_params <- list(
     rds_models=get_rds_models(), all_train_data=all_train_data,
     pred_vars=pred_vars, pred_vars_nosar=pred_vars_nosar, predict_var=predict_var,
-    model=ranger, sample=TRUE
+    model=ranger, sample=TRUE, tile_num=tile_num
   )
 
   results <- do.call(run_modeling_pipeline, modifyList(
