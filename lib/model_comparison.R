@@ -52,6 +52,12 @@ randomize_AGB_model <- function(model){
   return(model)
 }
 
+stratified_random_sample <- function(df, max_n) {
+  df |> group_by(segment_landcover) |> summarise(c=n()) |> filter(c < 1000)
+  #group_size = max_n / 
+
+}
+
 GEDI2AT08AGB<-function(rds_models, df, randomize=FALSE, max_n=10000, sample=TRUE){
   if (sample && nrow(df) > max_n)
     df <- reduce_sample_size(df, max_n)
@@ -397,11 +403,23 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
                                  max_samples, sample, pred_vars, pred_vars_nosar, predict_var, tile_num, folds=10){
 
   print('creating AGB traing data frame.')
+  #stop('ss')
   all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
   df <- setup_kfold(all_train_data_AGB, 10)
+  counts <- df |> group_by(segment_landcover) |> summarise(num_samples=n()) |> ungroup()
   # run a 10-fold CV with and without SAR features
   results <- data.frame()
+  n <- nrow(df)
+  nunique <- n_distinct(df$segment_landcover)
+  cat("n=",n, " nunique classes=", nunique, " inclusion pct=", n/nunique, "\n")
+  df <- df |>
+    group_by(segment_landcover) |>
+    summarise(count=n()) |>
+    right_join(df, by='segment_landcover') |>
+    filter(count >= n/nunique)
 
+  print(df |> group_by(segment_landcover) |> summarise(count=n()))
+  
   for (fold in 1:folds) {
     t1 <- Sys.time()
     cat('fold:', fold, '\n')
@@ -410,7 +428,8 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
     val_df <- df[df['folds'] == fold, ]
 
     print('fitting model with SAR')
-
+    print(train_df |> group_by(segment_landcover) |> summarise(count=n()))
+    
     model_sar <- fit_model(model, model_config, train_df, pred_vars, predict_var)
     print('predicting with SAR')
     result <- validate(model_sar, val_df)
@@ -438,7 +457,8 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
     ) |>
     ungroup() |>
     mutate(tile_num=as.integer(tile_num)) |>
-    pivot_wider(names_from = predictors, values_from = c(R2, RMSE))
+    pivot_wider(names_from = predictors, values_from = c(R2, RMSE)) |>
+    left_join(counts, by='segment_landcover')
 
   return(final_results)
 }
@@ -572,5 +592,6 @@ print(opt)
 if (!is.null(opt$help)) {
   print_help(opt_parser)
 }
+set.seed(123)
 #setwd('~/')
 do.call(mapBoreal, opt)
