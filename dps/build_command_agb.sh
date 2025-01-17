@@ -13,8 +13,8 @@ source activate icesat2_boreal
 # needed for ee asset export
 #mamba install --name icesat2_boreal -c conda-forge earthengine-api
 
-pip install git+https://github.com/MAAP-Project/maap-py.git@v4.1.0
+# pip install git+https://github.com/MAAP-Project/maap-py.git@v4.1.0
 
 source activate r
 conda install -c conda-forge r-optparse r-ranger -y
-pip3 install pyOpenSSL --upgrade
+#pip3 install pyOpenSSL --upgrade
