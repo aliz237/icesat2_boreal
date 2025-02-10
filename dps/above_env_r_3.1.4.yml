@@ -3,6 +3,8 @@ channels:
   - conda-forge
   - defaults
 dependencies:
+  - python=3.10.13
+  - gxx_linux-64
   - geopandas
   - rasterio
   - importlib_resources
