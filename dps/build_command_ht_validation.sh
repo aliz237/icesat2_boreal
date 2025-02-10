@@ -7,5 +7,5 @@ pushd ${HOME}
 
 source activate icesat2_boreal
 
-apt-get install build-essential g++
+sudo apt-get install build-essential g++
 pip install richdem
