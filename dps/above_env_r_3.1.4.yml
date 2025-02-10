@@ -6,6 +6,7 @@ dependencies:
   - python=3.10.13
   - pybind11>=2.10
   - gxx_linux-64>=11.2.0
+  - richdem
   - geopandas
   - rasterio
   - importlib_resources
