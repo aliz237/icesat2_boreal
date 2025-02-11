@@ -1,5 +1,5 @@
 #!/bin/bash
-
+basedir=$( cd "$(dirname "$0")" ; pwd -P )
 libdir=$(dirname "$(dirname "${basedir}")")/lib
 
 mkdir output
