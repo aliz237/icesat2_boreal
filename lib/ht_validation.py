@@ -182,7 +182,7 @@ def main(boreal_tile_num, ht_tindex_path, boreal_tiles_path, lvis_footprints_pat
     slope_raster_path = slope_from_ZG_mean(mosaic_paths['ZG_mean'], base_meta)
 
     joined = sample_raster_at_points(joined, slope_raster_path, 'slope')
-    joined.to_csv('output/Ht_validation_{boreal_tile_num}.csv')
+    joined.to_csv(f'output/Ht_validation_{boreal_tile_num}.csv')
 
 
 def parse_arguments():
