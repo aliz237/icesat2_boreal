@@ -399,11 +399,81 @@ validate <- function(model, val_df){
   return(metrics)
 }
 
+add_boreal_Ht_band <- function(stack, boreal_Ht_path){
+  Ht <- resample_if_needed(rast(boreal_Ht_path), stack)
+  stack <- c(stack, Ht)
+  return(stack)
+}
+
+add_lvis_band <- function(stack, lvis_footprints_gpkg){
+  lvis_footprints <- st_read(lvis_footprints_gpkg)
+  # Transform stack extent to the CRS of lvis_footprints
+  raster_extent <- as.polygons(ext(stack), crs = crs(stack)) |> st_as_sf()
+  raster_extent <- st_transform(raster_extent, st_crs(lvis_footprints))
+
+  # Find the intersection
+  intersecting_footprints <- st_intersection(lvis_footprints, raster_extent)
+  intersecting_paths <- intersecting_footprints$s3_path
+  print(intersecting_paths)
+
+  download_dir <- "/tmp"
+  for (path in intersecting_paths) {
+    file_name <- basename(path)
+    download.file(path, file.path(download_dir, file_name), mode = "wb")
+  }
+
+  # List all LVIS rasters in the download directory (/tmp)
+  download_dir <- "/tmp"
+  lvis_files <- list.files(download_dir, pattern = "\\.tif$", full.names = TRUE)  # Assuming they are GeoTIFFs
+
+  # Check if any files were found
+  if (length(lvis_files) == 0) {
+    stop("No LVIS rasters found in /tmp")
+  }
+
+  # Load all LVIS rasters into a SpatRaster collection
+  lvis_stack <- lapply(lvis_files, rast)
+  lvis_mosaic <- do.call(merge, lvis_stack)  # Merge all rasters into a single mosaic
+
+  
+  # Ensure LVIS mosaic matches the CRS, resolution, and extent of the stack
+  lvis_mosaic <- project(lvis_mosaic, stack)
+  lvis_mosaic <- crop(lvis_mosaic, ext(stack))
+  lvis_mosaic <- resample(lvis_mosaic, stack)
+
+  # plot(lvis_mosaic)
+
+  # Save the mosaic
+  output_mosaic <- "/tmp/lvis_mosaic.tif"
+  writeRaster(lvis_mosaic, output_mosaic, overwrite = TRUE)
+  cat("Mosaic saved to:", output_mosaic)
+
+  # Add lvis_mosaic as a new band to the existing raster
+  stack <- c(stack, lvis_mosaic)
+  print(stack)
+  # Save the updated raster
+  output_combined <- "/tmp/combined_raster.tif"
+  writeRaster(stack, output_combined, overwrite = TRUE)
+  cat("Combined raster saved to:", output_combined)
+
+}
+
+ground_truth_df <- function(stack){
+
+  # aligned stack of HLS, SAR, LVIS or NEON, TOPO, Boreal Ht
+  # construct a df with columns: pred_vars, LVIS Ht or Neon Ht, Boreal Ht
+  raster_df <- as.data.frame(stack, xy = TRUE, na.rm = TRUE)
+  geo_df <- st_as_sf(raster_df, coords = c("x", "y"), crs = crs(stack))
+  head(geo_df)
+  return(geo_df)
+}
+
+
 run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config,
                                  max_samples, sample, pred_vars, pred_vars_nosar, predict_var, tile_num, folds=10){
 
   print('creating AGB traing data frame.')
-  #stop('ss')
+  # stop('ss')
   all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
   df <- setup_kfold(all_train_data_AGB, 10)
   counts <- df |> group_by(segment_landcover) |> summarise(num_samples=n()) |> ungroup()
@@ -483,15 +553,86 @@ parse_pred_vars <- function(pred_vars){
   return(list(pred_vars=pred_vars, pred_vars_nosar=pred_vars_nosar))
 }
 
-mapBoreal<-function(atl08_path, broad_path, boreal_vector_path, year,
-                    max_sol_el=0, offset=100, minDOY=1, maxDOY=365,
-                    expand_training=TRUE,
-                    local_train_perc=100, min_samples=5000, max_samples=10000,
+resample_if_needed <- function(src, des){
+  if (nrow(src) != nrow(des) || ncol(src) != ncol(des)){
+    src <- resample(src, des, method = 'near')
+    ext(src) <- ext(des)
+  }
+  return(src)
+}
+
+prepare_raster <- function(path, subset_bands=NULL, extra_bands=NULL, dest_raster=NULL){
+  raster <- rast(path)
+  raster_bands <- names(raster)
+
+  if (!is.null(subset_bands))
+    raster_bands <- intersect(raster_bands, subset_bands)
+
+  if (!is.null(extra_bands))
+    raster_bands <- c(raster_bands, extra_bands)
+
+  raster <- subset(raster, raster_bands)
+
+  if (!is.null(dest_raster))
+    raster <- resample_if_needed(raster, dest_raster)
+
+  return(raster)
+}
+
+resample_reproject_and_mask <- function(topo_path, hls_path, lc_path, pred_vars, mask, sar_path=NULL){
+  hls <- prepare_raster(hls_path, subset_bands=pred_vars, extra_bands='ValidMask')
+  topo <- prepare_raster(topo_path, subset_bands=pred_vars, extra_bands='slopemask', dest_raster=hls)
+  lc <- prepare_raster(lc_path, dest_raster=hls)
+
+  if (!is.null(sar_path)) {
+    sar_path <- sub("^s3://", "/vsis3/", sar_path)
+    sar <- prepare_raster(sar_path, subset_bands=pred_vars, dest_raster=hls)
+    stack <- c(hls, sar, topo, lc)
+  }
+  else {
+    stack <- c(hls, topo, lc)
+  }
+
+  if(mask)
+    stack <- mask_input_stack(stack)
+
+  # landcover mask is not needed anymore
+  # TODO I think masks are not probably needed once we leave this function
+  stack <- subset(stack, names(stack) != 'esa_worldcover_v100_2020')
+  return(stack)
+}
+
+mask_input_stack <- function(stack){
+  MASK_LYR_NAMES = c('slopemask', 'ValidMask')
+  MASK_LANDCOVER_NAMES = c(50, 60, 70, 80)
+
+  print("Masking stack...")
+  # Bricking the stack will make the masking faster (i think)
+  # brick = rast(stack)
+  for(LYR_NAME in MASK_LYR_NAMES){
+    m <- terra::subset(stack, grep(LYR_NAME, names(stack), value = T))
+    stack <- mask(stack, m == 0, maskvalue=TRUE)
+  }
+
+  for(LC_NAME in MASK_LANDCOVER_NAMES){
+    n <- terra::subset(stack, grep('esa_worldcover_v100_2020', names(stack), value=LC_NAME))
+    stack <- mask(stack, n == LC_NAME, maskvalue=TRUE)
+  }
+
+  return(stack)
+}
+
+mapBoreal<-function(atl08_path, broad_path, hls_path, topo_path, lc_path, boreal_ht_path, boreal_vector_path, year,
+                    sar_path=NULL, mask=TRUE, max_sol_el=0, offset=100, minDOY=1, maxDOY=365,
+                    expand_training=TRUE, local_train_perc=100, min_samples=5000, max_samples=10000,
                     predict_var='AGB', pred_vars=c('elevation', 'slope', 'NDVI')){
 
   tile_num = tail(unlist(strsplit(path_ext_remove(atl08_path), "_")), n=1)
   cat("Modelling and mapping boreal AGB tile: ", tile_num, "\n")
-
+  stack <- resample_reproject_and_mask(topo_path, hls_path, lc_path, pred_vars, mask, sar_path)
+  stack <- add_lvis_band(stack, lvis_footprints_gpkg)
+  # stack <- add_Boreal_Ht_band(stack, boreal_ht_path)
+  stop('testing')
   pred_vars_all <- parse_pred_vars(pred_vars)
   pred_vars <- pred_vars_all[['pred_vars']]
   pred_vars_nosar <- pred_vars_all[['pred_vars_nosar']]
@@ -529,8 +670,36 @@ option_list <- list(
     help = "Path to the boreal wide training data"
   ),
   make_option(
+    c("-t", "--topo_path"), type = "character",
+    help = "Path to the topo stack file"
+  ),
+  make_option(
+    c("-h", "--hls_path"), type = "character",
+    help = "Path to the HLS stack file"
+  ),
+  make_option(
+    c("-l", "--lc_path"), type = "character",
+    help = "Path to the land cover mask file"
+  ),
+  make_option(
+    c("-s", "--sar_path"), type = "character", default = NULL,
+    help = "Path to the land cover mask file"
+  ),
+  make_option(
+    c("--boreal_ht_path"), type = "character", default = NULL,
+    help = "Path to the boreal Ht raster"
+  ),
+  make_option(
+    c("-v", "--boreal_vector_path"), type = "character",
+    help = "Path to the boreal vector file",
+    ),
+  make_option(
     c("-y", "--year"), type = "character",
     help = "Year of the input HLS imagery"
+  ),
+  make_option(
+    c("-m", "--mask"), type = "logical", default = TRUE,
+    help = "Whether to mask imagery [default: %default]"
   ),
   make_option(
     c("--max_sol_el"), type = "numeric", default = 5,
@@ -593,5 +762,5 @@ if (!is.null(opt$help)) {
   print_help(opt_parser)
 }
 set.seed(123)
-#setwd('~/')
+setwd('~/')
 do.call(mapBoreal, opt)
