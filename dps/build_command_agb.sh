@@ -7,6 +7,6 @@ conda env create -f ${basedir}/above_env_r_3.1.4.yml
 
 pushd ${HOME}
 
-conda activate r
+source activate r
 conda env update -f ${basedir}/r_libs.yml
 Rscript -e "install.packages('paws.storage', repos='https://cloud.r-project.org')"
