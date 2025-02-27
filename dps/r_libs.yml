@@ -1,0 +1,11 @@
+dependencies:
+  - r-optparse
+  - r-xml2
+  # - r-tidyr
+  # - r-dplyr
+  # - r-sf
+  # - r-fs
+  # - r-randomforest
+  # - r-ranger
+  # - r-rockchalk
+  # - r-terra

@@ -5,13 +5,8 @@
 #source activate icesat2_boreal
 basedir=$( cd "$(dirname "$0")" ; pwd -P )
 libdir=$(dirname "$(dirname "${basedir}")")/lib
-#unset PROJ_LIB
-
-#pip install --user -r ${basedir}/requirements.txt
-
 mkdir output
 
-# Note: the numbered args are fed in with the in_param_dict in the Run DPS chunk of 3.4_dps.ipynb
 ATL08_tindex_master_fn=${1}
 ATL08_SAMPLE_CSV=${2}
 in_tile_num=${3}
@@ -28,6 +23,11 @@ max_n=${13}
 pred_vars=${14}
 bio_models_tar_fn=${15}
 year=${16}
+in_topo_fn=${17}
+in_hls_fn=${18}
+in_sar_fn=${19}
+in_lc_fn=${20}
+in_lvis_fn=${21}
 
 source activate icesat2_boreal
 
@@ -54,6 +54,12 @@ source activate r
 args=(--atl08_path "${MERGED_ATL08_CSV}")
 args+=(--broad_path "${2}")
 args+=(--year "${16}")
+args+=(--topo_path "${17}")
+args+=(--hls_path "${18}")
+args+=(--sar_path "${19}")
+args+=(--lc_path "${20}")
+args+=(--lvis_gpkg "${21}")
+
 
 # optional arguments
 [[ -n "${6}" ]] && args+=(--minDOY "${6}")

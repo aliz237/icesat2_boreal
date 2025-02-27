@@ -1,12 +1,14 @@
 library(optparse)
-#library(randomForest)
-library(ranger)
+library(randomForest)
+#library(ranger)
 library(tidyr)
 library(dplyr)
+library(sf)
 library(fs)
 library(stringr)
 library(rockchalk)
 library(terra)
+library(paws.storage)
 
 get_height_column_names <- function(in_data){
   return(
@@ -231,8 +233,9 @@ set_output_file_names <- function(predict_var, tile_num, year){
     sep="_"
   )
 
-  fn_suffix <- c('.tif', '_summary.csv', '_train_data.csv', '_stats.Rds', '_model.Rds', '_comparison.csv')
-  names <- c('map', 'summary', 'train', 'stats', 'model', 'comparison')
+  fn_suffix <- c('.tif', '_summary.csv', '_train_data.csv', '_stats.Rds',
+  '_model.Rds', '_comparison.csv', '_cv.csv', '_lvis_r2_rmse.csv')
+  names <- c('map', 'summary', 'train', 'stats', 'model', 'comparison', 'cv', 'r2_rmse_lvis')
 
   output_file_names <- paste0(out_fn_stem, fn_suffix)
   names(output_file_names) <- names
@@ -386,99 +389,96 @@ setup_kfold <- function(train_df, k) {
   return(train_df)
 }
 
-validate <- function(model, val_df){
-  predictions <- predict(model, val_df)$predictions
-  val_df$residuals <- predictions - val_df[['AGB']]
+validate <- function(model, val_df, predict_var){
+print(names(model))
+  target_var <- if (predict_var == 'Ht') 'h_canopy' else 'AGB'
+  predictions <- predict(model, val_df)
+  val_df$residuals <- predictions - val_df[[target_var]]
   metrics <- val_df %>%
     group_by(segment_landcover) %>%
     summarise(
       RMSE = sqrt(mean(residuals^2, na.rm = TRUE)),
-      R2 = 1 - (sum(residuals^2, na.rm = TRUE) / sum((AGB - mean(AGB, na.rm = TRUE))^2, na.rm = TRUE))
+      R2 = 1 - (sum(residuals^2, na.rm = TRUE) / sum((.data[[target_var]] - mean(.data[[target_var]], na.rm = TRUE))^2, na.rm = TRUE))
     ) %>%
     ungroup()
   return(metrics)
 }
 
-add_boreal_Ht_band <- function(stack, boreal_Ht_path){
-  Ht <- resample_if_needed(rast(boreal_Ht_path), stack)
-  stack <- c(stack, Ht)
-  return(stack)
-}
+download_rasters_from_s3 <- function(s3_paths){
+  bucket <- 'ornl-cumulus-prod-protected'
+  local_dir <- '/tmp'
+  s3 <- s3()
+  local_paths <- c()
 
-add_lvis_band <- function(stack, lvis_footprints_gpkg){
-  lvis_footprints <- st_read(lvis_footprints_gpkg)
-  # Transform stack extent to the CRS of lvis_footprints
-  raster_extent <- as.polygons(ext(stack), crs = crs(stack)) |> st_as_sf()
-  raster_extent <- st_transform(raster_extent, st_crs(lvis_footprints))
-
-  # Find the intersection
-  intersecting_footprints <- st_intersection(lvis_footprints, raster_extent)
-  intersecting_paths <- intersecting_footprints$s3_path
-  print(intersecting_paths)
-
-  download_dir <- "/tmp"
-  for (path in intersecting_paths) {
-    file_name <- basename(path)
-    download.file(path, file.path(download_dir, file_name), mode = "wb")
+  for (s3_path in s3_paths) {
+    s3_parts <- strsplit(sub("s3://", "", s3_path), "/")[[1]]
+    bucket <- s3_parts[1]
+    key <- paste(s3_parts[-1], collapse = "/")
+    local_path <- file.path(local_dir, basename(s3_path))
+    cat("Bucket:", bucket, "Key:", key, "local_path:", local_path, "\n")
+    response <- s3$get_object(Bucket = bucket, Key = key)
+    writeBin(response$Body, local_path)
+    cat("Downloaded:", s3_path, "->", local_path, "\n")
+    local_paths <- c(local_paths, local_path)
   }
 
-  # List all LVIS rasters in the download directory (/tmp)
-  download_dir <- "/tmp"
-  lvis_files <- list.files(download_dir, pattern = "\\.tif$", full.names = TRUE)  # Assuming they are GeoTIFFs
+  return(local_paths)
+}
 
-  # Check if any files were found
+create_lvis_mosaic <- function(stack, lvis_footprints_gpkg){
+  lvis_footprints <- st_read(lvis_footprints_gpkg)
+  # Transform stack extent to the CRS of lvis_footprints
+  print('AOI Before transform:')
+  print(ext(stack))
+  raster_extent <- as.polygons(ext(stack), crs = crs(stack)) |> st_as_sf()
+  print(raster_extent)
+  raster_extent <- st_transform(raster_extent, st_crs(lvis_footprints))
+  print('AOI after transform:')
+  print(raster_extent)
+  intersecting_footprints <- st_intersection(lvis_footprints, raster_extent)
+  intersecting_footprints <- intersecting_footprints |>
+    mutate(
+      FILE = str_replace(FILE, "lvis_pt_cnt", "RH098_mean"),
+      FILE = paste0("s3://ornl-cumulus-prod-protected/above/ABoVE_LVIS_VegetationStructure/data/", FILE)
+    )
+  lvis_files <- download_rasters_from_s3(intersecting_footprints$FILE)
+  print(lvis_files)
   if (length(lvis_files) == 0) {
     stop("No LVIS rasters found in /tmp")
   }
-
-  # Load all LVIS rasters into a SpatRaster collection
   lvis_stack <- lapply(lvis_files, rast)
-  lvis_mosaic <- do.call(merge, lvis_stack)  # Merge all rasters into a single mosaic
+  lvis_mosaic <- do.call(merge, lvis_stack)
 
-  
   # Ensure LVIS mosaic matches the CRS, resolution, and extent of the stack
   lvis_mosaic <- project(lvis_mosaic, stack)
   lvis_mosaic <- crop(lvis_mosaic, ext(stack))
   lvis_mosaic <- resample(lvis_mosaic, stack)
 
-  # plot(lvis_mosaic)
-
-  # Save the mosaic
   output_mosaic <- "/tmp/lvis_mosaic.tif"
   writeRaster(lvis_mosaic, output_mosaic, overwrite = TRUE)
   cat("Mosaic saved to:", output_mosaic)
 
-  # Add lvis_mosaic as a new band to the existing raster
-  stack <- c(stack, lvis_mosaic)
-  print(stack)
-  # Save the updated raster
-  output_combined <- "/tmp/combined_raster.tif"
-  writeRaster(stack, output_combined, overwrite = TRUE)
-  cat("Combined raster saved to:", output_combined)
-
-}
-
-ground_truth_df <- function(stack){
-
-  # aligned stack of HLS, SAR, LVIS or NEON, TOPO, Boreal Ht
-  # construct a df with columns: pred_vars, LVIS Ht or Neon Ht, Boreal Ht
-  raster_df <- as.data.frame(stack, xy = TRUE, na.rm = TRUE)
-  geo_df <- st_as_sf(raster_df, coords = c("x", "y"), crs = crs(stack))
-  head(geo_df)
-  return(geo_df)
+  return(lvis_mosaic)
 }
 
 
-run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config,
-                                 max_samples, sample, pred_vars, pred_vars_nosar, predict_var, tile_num, folds=10){
+predict_stack <- function(model, stack, majority_lc_classes){
+  stack <- na.omit(stack)
+  lc_classes_matrix <- cbind(majority_lc_classes, 1)  # Assign value 1 to valid classes
+  landcover_mask <- classify(stack$esa_worldcover_v100_2020, lc_classes_matrix, others=NA)
+  map <- predict(stack, model, na.rm=TRUE)
+  map[!landcover_mask] <- NA
+  # set slope and valid mask to zero
+  # TODO maybe mask can skip over these pixels by default?
+  map <- mask(map, stack$slopemask, maskvalues=0, updatevalue=0)
+  map <- mask(map, stack$ValidMask, maskvalues=0, updatevalue=0)
 
+  return(map)
+}
+
+subset_to_majority_lc_classes <- function(df){
   print('creating AGB traing data frame.')
-  # stop('ss')
-  all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
-  df <- setup_kfold(all_train_data_AGB, 10)
   counts <- df |> group_by(segment_landcover) |> summarise(num_samples=n()) |> ungroup()
-  # run a 10-fold CV with and without SAR features
-  results <- data.frame()
   n <- nrow(df)
   nunique <- n_distinct(df$segment_landcover)
   cat("n=",n, " nunique classes=", nunique, " inclusion pct=", n/nunique, "\n")
@@ -489,7 +489,13 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
     filter(count >= n/nunique)
 
   print(df |> group_by(segment_landcover) |> summarise(count=n()))
-  
+  return(df)
+}
+
+cross_validate <- function(df, pred_vars, pred_vars_nosar, folds, model, model_config, tile_num){
+  df <- setup_kfold(df, 10)
+  results <- data.frame()
+
   for (fold in 1:folds) {
     t1 <- Sys.time()
     cat('fold:', fold, '\n')
@@ -500,26 +506,28 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
     print('fitting model with SAR')
     print(train_df |> group_by(segment_landcover) |> summarise(count=n()))
     
-    model_sar <- fit_model(model, model_config, train_df, pred_vars, predict_var)
+    model_sar <- fit_model(model, model_config, train_df, pred_vars, 'Ht')
     print('predicting with SAR')
-    result <- validate(model_sar, val_df)
+    result <- validate(model_sar, val_df, 'Ht')
     result$predictors <- 'with_sar'
     result$fold <- fold
     results <- rbind(results, result)
 
     print('fitting model without SAR')
-    model_nosar <- fit_model(model, model_config, train_df, pred_vars_nosar, predict_var)
+    model_nosar <- fit_model(model, model_config, train_df, pred_vars_nosar, 'Ht')
     print('predicting with SAR')
-    result <- validate(model_nosar, val_df)
+    result <- validate(model_nosar, val_df, 'Ht')
     result$predictors <- 'without_sar'
     result$fold <- fold
     results <- rbind(results, result)
-    
+    print(result)
     t2 <- Sys.time()
     cat('Fold runtime:', difftime(t2, t1, units="mins"), ' (m)\n')
   }
 
-  final_results <- results |>
+  counts <- df |> group_by(segment_landcover) |> summarise(num_samples=n()) |> ungroup()
+  print(counts)
+  cv_results <- results |>
     group_by(segment_landcover, predictors) |>
     summarise(
       R2=mean(R2, na.rm=TRUE),
@@ -529,9 +537,110 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
     mutate(tile_num=as.integer(tile_num)) |>
     pivot_wider(names_from = predictors, values_from = c(R2, RMSE)) |>
     left_join(counts, by='segment_landcover')
-
-  return(final_results)
+  print(cv_results)
+  return(cv_results)
 }
+
+evaluate_rmse_r2 <- function(predictions, truth, landcover, majority_lc_classes) {
+  pred_values <- values(predictions, mat=FALSE)
+  truth_values <- values(truth, mat=FALSE)
+  lc_values <- values(landcover, mat=FALSE)
+  print('-------------------')
+  print(majority_lc_classes)
+  print('-------------------')
+  vals <- data.frame(
+    predictions = pred_values,
+    truth = truth_values,
+    landcover = lc_values
+  )
+  print(vals |> group_by(landcover) |> summarise(count=n()))
+  vals <- na.omit(vals)
+  print(vals |> group_by(landcover) |> summarise(count=n()))
+
+  # overal RMSE and R2 on all classes
+  overall_metrics <- data.frame(
+    landcover = -1,
+    RMSE = sqrt(mean((vals$predictions - vals$truth)^2)),
+    R2 = cor(vals$predictions, vals$truth, method = "pearson")^2
+  )
+
+  # Filter by majority land cover classes
+  vals <- vals[vals$landcover %in% majority_lc_classes, ]
+  print(vals |> group_by(landcover) |> summarise(count=n()))
+  if (nrow(vals) == 0) {
+    stop("No valid data for RMSE and R² calculation. All values may be NA.")
+  }
+  filtered_metrics <- data.frame(
+    landcover = -2,
+    RMSE = sqrt(mean((vals$predictions - vals$truth)^2)),
+    R2 = cor(vals$predictions, vals$truth, method = "pearson")^2
+  )
+
+  print("Compute RMSE and R² by land cover classes")
+  metrics <- vals %>%
+    group_by(landcover) %>%
+    summarise(
+      RMSE = sqrt(mean((predictions - truth)^2)),
+      R2 = cor(predictions, truth, method = "pearson")^2
+    ) %>%
+    ungroup()
+
+  metrics <- bind_rows(metrics, overall_metrics, filtered_metrics)
+  return(metrics)
+}
+
+fit_predict_evaluate <- function(model, model_config, training_df, pred_vars, predict_vars, with_without_sar){
+  cat('fitting model :', with_without_sar)
+  model <- fit_model(model, model_config, df, pred_vars, predict_var)
+  cat('predicting :', with_without_sar)
+  sar_map <- predict_stack(model, stack, majority_lc_classes)
+
+  print('evaluating r2 and rmse with SAR')
+  sar_lvis <- evaluate_rmse_r2(sar_map, lvis_mosaic, stack$esa_worldcover_v100_2020, majority_lc_classes_list)
+  sar_lvis$predict_vars <- 'with_sar'
+
+}
+
+run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config,
+                                 max_samples, sample, pred_vars, pred_vars_nosar,
+                                 predict_var, tile_num, stack, lvis_footprints_gpkg, folds=10){
+
+  all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
+  df <- subset_to_majority_lc_classes(all_train_data_AGB)
+  majority_lc_classes <- df |> distinct(segment_landcover)
+  majority_lc_classes_list <- majority_lc_classes |> pull(segment_landcover))
+  cv_results <- cross_validate(df, pred_vars, pred_vars_nosar, folds, model, model_config, tile_num)
+  # print(cv_results)
+  print(freq(stack$esa_worldcover_v100_2020))
+  print('creating LVIS mosaic')
+  lvis_mosaic <- create_lvis_mosaic(stack, lvis_footprints_gpkg)
+
+  print('fitting model with sar')
+  sar_model <- fit_model(model, model_config, df, pred_vars, predict_var)
+
+  print('predicting with sar')
+  sar_map <- predict_stack(sar_model, stack, majority_lc_classes)
+
+  print('evaluating r2 and rmse with SAR')
+  sar_lvis <- evaluate_rmse_r2(sar_map, lvis_mosaic, stack$esa_worldcover_v100_2020, majority_lc_classes_list)
+  sar_lvis$predict_vars <- 'with_sar'
+
+  print('fitting model without sar')
+  nosar_model <- fit_model(model, model_config, df, pred_vars_nosar, predict_var)
+
+  print('predicting without sar')
+  nosar_map <- predict_stack(nosar_model, stack, majority_lc_classes)
+
+  print('evaluating r2 and rmse without SAR')
+  nosar_lvis <- evaluate_rmse_r2(nosar_map, lvis_mosaic, stack$esa_worldcover_v100_2020, majority_lc_classes_list)
+  nosar_lvis$predict_vars <- 'without_sar'
+
+  r2_rmse_lvis <- bind_rows(nosar_lvis, sar_lvis)
+  print(r2_rmse_lvis)
+
+  return(list(cv_results=cv_results, r2_rmse_lvis=r2_rmse_lvis))
+}
+
 
 resample_if_needed <- function(src, des){
   if (nrow(src) != nrow(des) || ncol(src) != ncol(des)){
@@ -579,26 +688,16 @@ prepare_raster <- function(path, subset_bands=NULL, extra_bands=NULL, dest_raste
   return(raster)
 }
 
-resample_reproject_and_mask <- function(topo_path, hls_path, lc_path, pred_vars, mask, sar_path=NULL){
+resample_reproject_and_mask <- function(topo_path, hls_path, lc_path, pred_vars, mask, sar_path){
   hls <- prepare_raster(hls_path, subset_bands=pred_vars, extra_bands='ValidMask')
   topo <- prepare_raster(topo_path, subset_bands=pred_vars, extra_bands='slopemask', dest_raster=hls)
   lc <- prepare_raster(lc_path, dest_raster=hls)
-
-  if (!is.null(sar_path)) {
-    sar_path <- sub("^s3://", "/vsis3/", sar_path)
-    sar <- prepare_raster(sar_path, subset_bands=pred_vars, dest_raster=hls)
-    stack <- c(hls, sar, topo, lc)
-  }
-  else {
-    stack <- c(hls, topo, lc)
-  }
+  sar <- prepare_raster(sar_path, subset_bands=pred_vars, dest_raster=hls)
+  stack <- c(hls, sar, topo, lc)
 
   if(mask)
     stack <- mask_input_stack(stack)
-
-  # landcover mask is not needed anymore
-  # TODO I think masks are not probably needed once we leave this function
-  stack <- subset(stack, names(stack) != 'esa_worldcover_v100_2020')
+  # stack <- subset(stack, names(stack) != 'esa_worldcover_v100_2020')
   return(stack)
 }
 
@@ -622,22 +721,22 @@ mask_input_stack <- function(stack){
   return(stack)
 }
 
-mapBoreal<-function(atl08_path, broad_path, hls_path, topo_path, lc_path, boreal_ht_path, boreal_vector_path, year,
-                    sar_path=NULL, mask=TRUE, max_sol_el=0, offset=100, minDOY=1, maxDOY=365,
+mapBoreal<-function(atl08_path, broad_path, hls_path, topo_path, lc_path, year,
+                    lvis_gpkg, sar_path, mask=TRUE, max_sol_el=0, offset=100, minDOY=1, maxDOY=365,
                     expand_training=TRUE, local_train_perc=100, min_samples=5000, max_samples=10000,
                     predict_var='AGB', pred_vars=c('elevation', 'slope', 'NDVI')){
 
   tile_num = tail(unlist(strsplit(path_ext_remove(atl08_path), "_")), n=1)
   cat("Modelling and mapping boreal AGB tile: ", tile_num, "\n")
-  stack <- resample_reproject_and_mask(topo_path, hls_path, lc_path, pred_vars, mask, sar_path)
-  stack <- add_lvis_band(stack, lvis_footprints_gpkg)
-  # stack <- add_Boreal_Ht_band(stack, boreal_ht_path)
-  stop('testing')
+
   pred_vars_all <- parse_pred_vars(pred_vars)
   pred_vars <- pred_vars_all[['pred_vars']]
   pred_vars_nosar <- pred_vars_all[['pred_vars_nosar']]
   print(pred_vars)
   print(pred_vars_nosar)
+
+  stack <- resample_reproject_and_mask(topo_path, hls_path, lc_path, pred_vars, mask, sar_path)
+  print(names(stack))
 
   all_train_data <- prepare_training_data(
     atl08_path, broad_path, expand_training, minDOY,
@@ -647,17 +746,18 @@ mapBoreal<-function(atl08_path, broad_path, hls_path, topo_path, lc_path, boreal
   fixed_modeling_pipeline_params <- list(
     rds_models=get_rds_models(), all_train_data=all_train_data,
     pred_vars=pred_vars, pred_vars_nosar=pred_vars_nosar, predict_var=predict_var,
-    model=ranger, sample=TRUE, tile_num=tile_num
+    model=randomForest, sample=TRUE, tile_num=tile_num, stack=stack, lvis_footprints_gpkg=lvis_gpkg
   )
 
   results <- do.call(run_modeling_pipeline, modifyList(
     fixed_modeling_pipeline_params,
-    list(max_samples=max_samples, model_config=list(num.trees=500, mtry=6))
+    list(max_samples=max_samples, model_config=list(ntree=100, mtry=6))
   ))
 
   output_fns <- set_output_file_names(predict_var, tile_num, year)
-  write.csv(results, output_fns[['comparison']])
-  print('AGB successfully predicted!')
+  write.csv(results[['cv_results']], output_fns[['cv']])
+  write.csv(results[['r2_rmse_lvis']], output_fns[['r2_rmse_lvis']])
+  print('Model comparison finished successfully!')
 }
 
 option_list <- list(
@@ -686,13 +786,9 @@ option_list <- list(
     help = "Path to the land cover mask file"
   ),
   make_option(
-    c("--boreal_ht_path"), type = "character", default = NULL,
-    help = "Path to the boreal Ht raster"
+    c("--lvis_gpkg"), type = "character", default = NULL,
+    help = "Path to lvis"
   ),
-  make_option(
-    c("-v", "--boreal_vector_path"), type = "character",
-    help = "Path to the boreal vector file",
-    ),
   make_option(
     c("-y", "--year"), type = "character",
     help = "Year of the input HLS imagery"
@@ -762,5 +858,4 @@ if (!is.null(opt$help)) {
   print_help(opt_parser)
 }
 set.seed(123)
-setwd('~/')
 do.call(mapBoreal, opt)
