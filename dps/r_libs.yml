@@ -1,6 +1,9 @@
 dependencies:
   - r-optparse
   - r-xml2
+  - r-curl
+  - libgcc
+  - gxx_linux-64
   # - r-tidyr
   # - r-dplyr
   # - r-sf

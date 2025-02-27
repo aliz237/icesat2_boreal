@@ -1,6 +1,6 @@
 algorithm_description: compares SAR vs NO SAR boreal models using LVIS for validation
 algorithm_name: run_boreal_model_comparison
-algorithm_version: model_cmp_v1.5
+algorithm_version: model_cmp_v1.7
 build_command: icesat2_boreal/dps/build_command_agb.sh
 disk_space: 80GB
 docker_container_url: mas.maap-project.org/root/maap-workspaces/base_images/r:v4.1.0
