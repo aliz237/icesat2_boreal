@@ -9,4 +9,5 @@ pushd ${HOME}
 
 source activate r
 conda env update -f ${basedir}/r_libs.yml
+apt-get install -y libcurl4-openssl-dev
 Rscript -e "install.packages('paws.storage', repos='https://cloud.r-project.org')"
