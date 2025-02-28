@@ -425,8 +425,8 @@ download_rasters_from_s3 <- function(s3_paths){
   return(local_paths)
 }
 
-create_lvis_mosaic <- function(stack, lvis_footprints_gpkg){
-  lvis_footprints <- st_read(lvis_footprints_gpkg)
+create_lvis_mosaic <- function(stack, lvis_footprints_gpkg, year){
+  lvis_footprints <- st_read(lvis_footprints_gpkg, layer=paste0('LVISF3_', year))
   # Transform stack extent to the CRS of lvis_footprints
   print('AOI Before transform:')
   print(ext(stack))
@@ -603,7 +603,7 @@ fit_predict_evaluate <- function(model, model_config, training_df, pred_vars, pr
 
 run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config,
                                  max_samples, sample, pred_vars, pred_vars_nosar,
-                                 predict_var, tile_num, stack, lvis_footprints_gpkg, folds=10){
+                                 predict_var, tile_num, stack, lvis_footprints_gpkg, year, folds=10){
 
   all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
   df <- subset_to_majority_lc_classes(all_train_data_AGB)
@@ -613,7 +613,7 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
   # print(cv_results)
   print(freq(stack$esa_worldcover_v100_2020))
   print('creating LVIS mosaic')
-  lvis_mosaic <- create_lvis_mosaic(stack, lvis_footprints_gpkg)
+  lvis_mosaic <- create_lvis_mosaic(stack, lvis_footprints_gpkg, year)
 
   print('fitting model with sar')
   sar_model <- fit_model(model, model_config, df, pred_vars, predict_var)
@@ -745,7 +745,7 @@ mapBoreal<-function(atl08_path, broad_path, hls_path, topo_path, lc_path, year,
 
   fixed_modeling_pipeline_params <- list(
     rds_models=get_rds_models(), all_train_data=all_train_data,
-    pred_vars=pred_vars, pred_vars_nosar=pred_vars_nosar, predict_var=predict_var,
+    pred_vars=pred_vars, pred_vars_nosar=pred_vars_nosar, predict_var=predict_var, year=year,
     model=randomForest, sample=TRUE, tile_num=tile_num, stack=stack, lvis_footprints_gpkg=lvis_gpkg
   )
 
