@@ -357,7 +357,7 @@ prepare_training_data <- function(ice2_30_atl08_path, ice2_30_sample_path,
 }
 
 get_rds_models <- function(){
-  rds_model_fns <- list.files(pattern='*.rds')
+  rds_model_fns <- list.files(path='~/Downloads/bio_models_noground', pattern='*.rds', full.names=TRUE)
   rds_models <- lapply(rds_model_fns, readRDS)
   names(rds_models) <- paste0("m",1:length(rds_models))
   print(rds_models)
@@ -386,17 +386,74 @@ setup_kfold <- function(train_df, k) {
   return(train_df)
 }
 
-validate <- function(model, val_df){
-  predictions <- predict(model, val_df)$predictions
-  val_df$residuals <- predictions - val_df[['AGB']]
-  metrics <- val_df %>%
-    group_by(segment_landcover) %>%
-    summarise(
-      RMSE = sqrt(mean(residuals^2, na.rm = TRUE)),
-      R2 = 1 - (sum(residuals^2, na.rm = TRUE) / sum((AGB - mean(AGB, na.rm = TRUE))^2, na.rm = TRUE))
-    ) %>%
-    ungroup()
-  return(metrics)
+validate <- function(df, predict_var){
+  y_true <- if (predict_var == 'Ht') df$h_canopy else df$AGB
+  predict_var <- if (predict_var == 'Ht')  'h_canopy' else 'AGB'
+  df$residuals_SAR <- df[['SAR']] - y_true
+  df$residuals_no_SAR <- df[['NO_SAR']] - y_true
+  df <- na.omit(df)
+  result <- data.frame()
+  for (var in c('segment_landcover', 'height_class', 'slope_class')){
+    result <- rbind(
+      result,
+      df |>
+        group_by(across(all_of(var))) |>
+        summarise(
+          num_samples = n(),
+          RMSE_SAR = sqrt(mean(residuals_SAR^2, na.rm = TRUE)),
+          RMSE_PCT_SAR=sqrt(mean(residuals_SAR^2, na.rm = TRUE)) / mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          MAE_SAR=mean(abs(residuals_SAR)),
+          MAE_PCT_SAR=mean(abs(residuals_SAR))/mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          bias_SAR=mean(residuals_SAR),
+          bias_PCT_SAR=mean(residuals_SAR)/mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          R2_SAR = 1 - (sum(residuals_SAR^2, na.rm = TRUE) / sum((.data[[predict_var]] - mean(.data[[predict_var]], na.rm = TRUE))^2, na.rm = TRUE)),
+          RMSE_no_SAR = sqrt(mean(residuals_no_SAR^2, na.rm = TRUE)),
+          RMSE_PCT_no_SAR=sqrt(mean(residuals_no_SAR^2, na.rm = TRUE)) / mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          MAE_no_SAR=mean(abs(residuals_no_SAR)),
+          MAE_PCT_no_SAR=mean(abs(residuals_no_SAR))/mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          bias_no_SAR=mean(residuals_no_SAR),
+          bias_PCT_no_SAR=mean(residuals_no_SAR)/mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          R2_no_SAR = 1 - (sum(residuals_no_SAR^2, na.rm = TRUE) / sum((.data[[predict_var]] - mean(.data[[predict_var]], na.rm = TRUE))^2, na.rm = TRUE))
+        ) |>
+        ungroup() |>
+        mutate(group_type=var) |>
+        rename(group_value=all_of(var))
+    )
+  }
+  return(result)
+}
+
+add_height_and_slope_class <- function (df){
+
+  # Add height class and counts using RH_98 column
+  labels <- c("0-1 m", "1-2 m", "2-3 m", "3-4 m", "4-5 m", "5-10 m", "10-15 m", "15-20 m", "20-25 m", "25-30 m", "30> m")
+  breaks <- c(0, 1, 2, 3, 4, 5, 10, 15, 20, 25, 30, Inf)
+  df$height_class <- cut(df$h_canopy, breaks = breaks , include.lowest = TRUE, labels = labels, right = FALSE)
+  df <- df |>
+    group_by(height_class) |>
+    summarise(n_height_class=n()) |>
+    right_join(df, by='height_class') |>
+    filter(n_height_class >= 1) |>
+    select(-n_height_class)
+
+  # Add Slope Class and counts
+  labels <- c("0-5", "5-10", "10-15", "15-20", "20-25", "25-30", "30-35", "35-40", "40-45", "45-90")
+  df$slope_class <- cut(df$slope, breaks = c(seq(0, 45, 5), 90), right = FALSE, include.lowest = TRUE, labels=labels)
+  df <- df |>
+    group_by(slope_class) |>
+    summarise(n_slope_class=n()) |>
+    right_join(df, by='slope_class') |>
+    filter(n_slope_class >= 1) |>
+    select(-n_slope_class)
+
+  # Add Landcover class counts
+  df <- df |>
+    group_by(segment_landcover) |>
+    summarise(n_lc_class=n()) |>
+    right_join(df, by='segment_landcover') |>
+    select(-n_lc_class)
+
+  return(df)
 }
 
 run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config,
@@ -405,21 +462,13 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
   print('creating AGB traing data frame.')
   #stop('ss')
   all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
-  df <- setup_kfold(all_train_data_AGB, 10)
-  counts <- df |> group_by(segment_landcover) |> summarise(num_samples=n()) |> ungroup()
+  all_train_data_AGB <- add_height_and_slope_class(all_train_data_AGB)
+  df <- setup_kfold(all_train_data_AGB, folds)
   # run a 10-fold CV with and without SAR features
   results <- data.frame()
-  n <- nrow(df)
-  nunique <- n_distinct(df$segment_landcover)
-  cat("n=",n, " nunique classes=", nunique, " inclusion pct=", n/nunique, "\n")
-  df <- df |>
-    group_by(segment_landcover) |>
-    summarise(count=n()) |>
-    right_join(df, by='segment_landcover') |>
-    filter(count >= n/nunique)
+  df$SAR <- NA
+  df$NO_SAR <- NA
 
-  print(df |> group_by(segment_landcover) |> summarise(count=n()))
-  
   for (fold in 1:folds) {
     t1 <- Sys.time()
     cat('fold:', fold, '\n')
@@ -428,38 +477,22 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
     val_df <- df[df['folds'] == fold, ]
 
     print('fitting model with SAR')
-    print(train_df |> group_by(segment_landcover) |> summarise(count=n()))
-    
     model_sar <- fit_model(model, model_config, train_df, pred_vars, predict_var)
     print('predicting with SAR')
-    result <- validate(model_sar, val_df)
-    result$predictors <- 'with_sar'
-    result$fold <- fold
-    results <- rbind(results, result)
-
+    df[df['folds'] == fold, ]$SAR<- predict(model_sar,  df[df['folds'] == fold, ])$predictions
+    print(head(df[df['folds'] == fold, c('folds', 'SAR', 'h_canopy', 'RH_98')]))
     print('fitting model without SAR')
     model_nosar <- fit_model(model, model_config, train_df, pred_vars_nosar, predict_var)
-    print('predicting with SAR')
-    result <- validate(model_nosar, val_df)
-    result$predictors <- 'without_sar'
-    result$fold <- fold
-    results <- rbind(results, result)
-    
+    print('predicting without SAR')
+    df[df['folds'] == fold, ]$NO_SAR<- predict(model_nosar,  df[df['folds'] == fold, ])$predictions
+
     t2 <- Sys.time()
     cat('Fold runtime:', difftime(t2, t1, units="mins"), ' (m)\n')
   }
+  
 
-  final_results <- results |>
-    group_by(segment_landcover, predictors) |>
-    summarise(
-      R2=mean(R2, na.rm=TRUE),
-      RMSE=mean(RMSE, na.rm=TRUE)
-    ) |>
-    ungroup() |>
-    mutate(tile_num=as.integer(tile_num)) |>
-    pivot_wider(names_from = predictors, values_from = c(R2, RMSE)) |>
-    left_join(counts, by='segment_landcover')
-
+  final_results <- validate(df, predict_var)
+  
   return(final_results)
 }
 
@@ -511,7 +544,7 @@ mapBoreal<-function(atl08_path, broad_path, boreal_vector_path, year,
 
   results <- do.call(run_modeling_pipeline, modifyList(
     fixed_modeling_pipeline_params,
-    list(max_samples=max_samples, model_config=list(num.trees=500, mtry=6))
+    list(max_samples=max_samples, model_config=list(num.trees=50, mtry=6))
   ))
 
   output_fns <- set_output_file_names(predict_var, tile_num, year)
@@ -593,5 +626,5 @@ if (!is.null(opt$help)) {
   print_help(opt_parser)
 }
 set.seed(123)
-#setwd('~/')
+setwd('~/')
 do.call(mapBoreal, opt)
