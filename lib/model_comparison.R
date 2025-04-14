@@ -357,7 +357,7 @@ prepare_training_data <- function(ice2_30_atl08_path, ice2_30_sample_path,
 }
 
 get_rds_models <- function(){
-  rds_model_fns <- list.files(path='~/Downloads/bio_models_noground', pattern='*.rds', full.names=TRUE)
+  rds_model_fns <- list.files(pattern='*.rds')
   rds_models <- lapply(rds_model_fns, readRDS)
   names(rds_models) <- paste0("m",1:length(rds_models))
   print(rds_models)
@@ -392,7 +392,29 @@ validate <- function(df, predict_var){
   df$residuals_SAR <- df[['SAR']] - y_true
   df$residuals_no_SAR <- df[['NO_SAR']] - y_true
   df <- na.omit(df)
-  result <- data.frame()
+  result <- df |>
+        summarise(
+          num_samples = n(),
+          RMSE_SAR = sqrt(mean(residuals_SAR^2, na.rm = TRUE)),
+          RMSE_PCT_SAR=sqrt(mean(residuals_SAR^2, na.rm = TRUE)) / mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          MAE_SAR=mean(abs(residuals_SAR)),
+          MAE_PCT_SAR=mean(abs(residuals_SAR))/mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          bias_SAR=mean(residuals_SAR),
+          bias_PCT_SAR=mean(residuals_SAR)/mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          R2_SAR = 1 - (sum(residuals_SAR^2, na.rm = TRUE) / sum((.data[[predict_var]] - mean(.data[[predict_var]], na.rm = TRUE))^2, na.rm = TRUE)),
+          RMSE_no_SAR = sqrt(mean(residuals_no_SAR^2, na.rm = TRUE)),
+          RMSE_PCT_no_SAR=sqrt(mean(residuals_no_SAR^2, na.rm = TRUE)) / mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          MAE_no_SAR=mean(abs(residuals_no_SAR)),
+          MAE_PCT_no_SAR=mean(abs(residuals_no_SAR))/mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          bias_no_SAR=mean(residuals_no_SAR),
+          bias_PCT_no_SAR=mean(residuals_no_SAR)/mean(.data[[predict_var]], na.rm=TRUE) * 100,
+          R2_no_SAR = 1 - (sum(residuals_no_SAR^2, na.rm = TRUE) / sum((.data[[predict_var]] - mean(.data[[predict_var]], na.rm = TRUE))^2, na.rm = TRUE))
+        ) |>
+    mutate(
+      group_type='overall',
+      group_value='overall'
+    )
+
   for (var in c('segment_landcover', 'height_class', 'slope_class')){
     result <- rbind(
       result,
@@ -480,7 +502,7 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
     model_sar <- fit_model(model, model_config, train_df, pred_vars, predict_var)
     print('predicting with SAR')
     df[df['folds'] == fold, ]$SAR<- predict(model_sar,  df[df['folds'] == fold, ])$predictions
-    print(head(df[df['folds'] == fold, c('folds', 'SAR', 'h_canopy', 'RH_98')]))
+
     print('fitting model without SAR')
     model_nosar <- fit_model(model, model_config, train_df, pred_vars_nosar, predict_var)
     print('predicting without SAR')
@@ -491,9 +513,9 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
   }
   
 
-  final_results <- validate(df, predict_var)
-  
-  return(final_results)
+  cv_results_df <- validate(df, predict_var)
+  cv_results_df$tile_num <- as.integer(tile_num)
+  return(cv_results_df)
 }
 
 resample_if_needed <- function(src, des){
@@ -544,7 +566,7 @@ mapBoreal<-function(atl08_path, broad_path, boreal_vector_path, year,
 
   results <- do.call(run_modeling_pipeline, modifyList(
     fixed_modeling_pipeline_params,
-    list(max_samples=max_samples, model_config=list(num.trees=50, mtry=6))
+    list(max_samples=max_samples, model_config=list(num.trees=500, mtry=6))
   ))
 
   output_fns <- set_output_file_names(predict_var, tile_num, year)
@@ -626,5 +648,5 @@ if (!is.null(opt$help)) {
   print_help(opt_parser)
 }
 set.seed(123)
-setwd('~/')
+#setwd('~/')
 do.call(mapBoreal, opt)
