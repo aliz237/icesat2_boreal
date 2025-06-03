@@ -1,12 +1,13 @@
 library(optparse)
-#library(randomForest)
-library(ranger)
+library(randomForest)
+#library(ranger)
 library(tidyr)
 library(dplyr)
 library(fs)
 library(stringr)
 library(rockchalk)
 library(terra)
+library(ggplot2)
 
 get_height_column_names <- function(in_data){
   return(
@@ -231,8 +232,10 @@ set_output_file_names <- function(predict_var, tile_num, year){
     sep="_"
   )
 
-  fn_suffix <- c('.tif', '_summary.csv', '_train_data.csv', '_stats.Rds', '_model.Rds', '_comparison.csv')
-  names <- c('map', 'summary', 'train', 'stats', 'model', 'comparison')
+  fn_suffix <- c('.tif', '_summary.csv', '_train_data.csv', '_stats.Rds', '_model.Rds',
+                 '_comparison.csv', '_ntree.csv', '_rmse_reduction.csv', '_rmse_ntree.png')
+  names <- c('map', 'summary', 'train', 'stats', 'model', 'comparison',
+             'ntree', 'rmse_reduction', 'rmse_ntree')
 
   output_file_names <- paste0(out_fn_stem, fn_suffix)
   names(output_file_names) <- names
@@ -445,6 +448,19 @@ validate <- function(df, predict_var){
   return(result)
 }
 
+
+validate_ntree <- function(df, predict_var){
+  y_true <- if (predict_var == 'Ht') df$h_canopy else df$AGB
+  predict_var <- if (predict_var == 'Ht')  'h_canopy' else 'AGB'
+  df$residuals <- df[['PRED']] - y_true
+  df <- na.omit(df)
+  result <- df |> group_by(folds) |>
+        summarise(
+          RMSE = sqrt(mean(residuals^2, na.rm = TRUE))
+        )
+}
+
+
 add_height_and_slope_class <- function (df){
 
   # Add height class and counts using RH_98 column
@@ -518,6 +534,89 @@ run_modeling_pipeline <-function(rds_models, all_train_data, model, model_config
   return(cv_results_df)
 }
 
+run_modeling_pipeline_ntree <-function(rds_models, all_train_data, model, model_config,
+                                 max_samples, sample, pred_vars, pred_vars_nosar, predict_var, tile_num, folds=10){
+
+  print('creating AGB traing data frame.')
+  all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
+  df <- setup_kfold(all_train_data_AGB, folds)
+  # run a 10-fold CV
+  cv_results <- data.frame()
+
+  for (ntree in seq(10, 500, 5)){
+    model_config <- list(ntree=ntree)
+    print(model_config[['ntree']])
+    df$PRED <- -9999
+    for (fold in 1:folds) {
+      train_df <- df[df['folds'] != fold, ]
+      val_df <- df[df['folds'] == fold, ]
+
+      model_nosar <- fit_model(model, model_config, train_df, pred_vars_nosar, predict_var)
+      df[df['folds'] == fold, ]$PRED<- predict(model_nosar,  df[df['folds'] == fold, ])
+
+    }
+
+    cv_results_n <- validate_ntree(df, predict_var)
+    cv_results_n$ntree <- ntree
+    cv_results <- rbind(cv_results, cv_results_n)
+  }
+
+  results <- cv_results |>
+    group_by(ntree) |>
+    summarise(tile_num=as.integer(tile_num), mean_RMSE=mean(RMSE, na.rm=TRUE), sd_RMSE=sd(RMSE, na.rm=TRUE)) |>
+    ungroup()
+
+  print(results)
+
+  relative_rmse_reduction_potential <- function (n, optimal_n=500) {
+    rn <- results[results$ntree==n, "mean_RMSE", drop=TRUE]
+    ro <- results[results$ntree==optimal_n, "mean_RMSE", drop=TRUE]
+    round((rn - ro) / rn * 100, 2)
+  }
+  abs_rmse_reduction_potential <- function (n, optimal_n=500) {
+    rn <- results[results$ntree==n, "mean_RMSE", drop=TRUE]
+    ro <- results[results$ntree==optimal_n, "mean_RMSE", drop=TRUE]
+    round(rn - ro, 2)
+  }
+  test_ntree <- c(10, 30, 50, 100, 150)
+  rmse_reduction_results <- data.frame(
+    ntree=test_ntree,
+    rrrp=as.vector(sapply(test_ntree, relative_rmse_reduction_potential)),
+    arrp=as.vector(sapply(test_ntree, abs_rmse_reduction_potential)),
+    tile_num=tile_num
+  )
+
+  return(list(ntree_results=results, rmse_reduction_results=rmse_reduction_results))
+}
+
+plot_ntree_vs_rmse <- function(df){
+  p <- ggplot() +
+  ## geom_jitter(data = df,
+  ##             aes(ntree, RMSE),
+  ##             width = 0.2, height = 0, alpha = 0.35) +
+  # mean line
+  geom_line(data = df, aes(ntree, mean_RMSE), linewidth = 0.9) +
+  ## geom_point(data = df,
+  ##            aes(ntree, mean_RMSE), size = 2.5, colour = "steelblue") +
+  # ±2 SD error bars
+  geom_ribbon(data = df,
+                aes(ntree,
+                    ymin = mean_RMSE - 2 * sd_RMSE,
+                    ymax = mean_RMSE + 2 * sd_RMSE),
+              alpha=0.2) +
+  labs(x = "Number of trees (ntree)",
+       y = "RMSE (10-fold CV)",
+       title = paste0("Cross-validated RMSE vs. ntree, tile_num=", unique(df$tile_num))) +
+    theme_bw() +
+    theme(
+      plot.title = element_text(size=16, face='bold'),
+      axis.title = element_text(size=14, face='bold'),
+      axis.text = element_text(size=12, face='bold')
+    )
+
+  return(p)
+}
+
 resample_if_needed <- function(src, des){
   if (nrow(src) != nrow(des) || ncol(src) != ncol(des)){
     src <- resample(src, des, method = 'near')
@@ -561,16 +660,23 @@ mapBoreal<-function(atl08_path, broad_path, boreal_vector_path, year,
   fixed_modeling_pipeline_params <- list(
     rds_models=get_rds_models(), all_train_data=all_train_data,
     pred_vars=pred_vars, pred_vars_nosar=pred_vars_nosar, predict_var=predict_var,
-    model=ranger, sample=TRUE, tile_num=tile_num
+    model=randomForest, sample=TRUE, tile_num=tile_num
   )
-
-  results <- do.call(run_modeling_pipeline, modifyList(
+  results <- do.call(run_modeling_pipeline_ntree, modifyList(
     fixed_modeling_pipeline_params,
-    list(max_samples=max_samples, model_config=list(num.trees=500, mtry=6))
+    list(max_samples=max_samples, model_config=list(ntree=-9))
   ))
 
   output_fns <- set_output_file_names(predict_var, tile_num, year)
-  write.csv(results, output_fns[['comparison']])
+  write.csv(results[['ntree_results']], output_fns[['ntree']])
+  write.csv(results[['rmse_reduction_results']], output_fns[['rmse_reduction']])
+  ggsave(
+    output_fns[['rmse_ntree']],
+    plot = plot_ntree_vs_rmse(results[['ntree_results']]),
+    width = 7,
+    height = 5,
+    dpi = 300
+  )
   print('AGB successfully predicted!')
 }
 
@@ -640,7 +746,6 @@ option_list <- list(
 
 opt_parser <- OptionParser(option_list = option_list, add_help_option = FALSE)
 opt <- parse_args(opt_parser)
-
 cat("Parsed arguments:\n")
 print(opt)
 
@@ -648,5 +753,4 @@ if (!is.null(opt$help)) {
   print_help(opt_parser)
 }
 set.seed(123)
-#setwd('~/')
 do.call(mapBoreal, opt)
