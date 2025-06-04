@@ -8,4 +8,4 @@ conda env create -f ${basedir}/above_env_r_3.1.4.yml
 pushd ${HOME}
 
 source activate r
-conda install -c conda-forge r-optparse r-ranger r-ggplot2 -y
+conda install -c conda-forge r-optparse r-ranger r-ggplot2 r-doParallel -y

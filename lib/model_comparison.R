@@ -8,6 +8,8 @@ library(stringr)
 library(rockchalk)
 library(terra)
 library(ggplot2)
+library(foreach)
+library(doParallel)
 
 get_height_column_names <- function(in_data){
   return(
@@ -539,31 +541,39 @@ run_modeling_pipeline_ntree <-function(rds_models, all_train_data, model, model_
 
   print('creating AGB traing data frame.')
   all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
+  print('setting up cv folds')
   df <- setup_kfold(all_train_data_AGB, folds)
-  # run a 10-fold CV
-  cv_results <- data.frame()
 
-  for (ntree in seq(10, 500, 5)){
-    model_config <- list(ntree=ntree)
-    print(model_config[['ntree']])
-    df$PRED <- -9999
-    for (fold in 1:folds) {
-      train_df <- df[df['folds'] != fold, ]
-      val_df <- df[df['folds'] == fold, ]
+  ntree_seq <- seq(10, 500, 10)
+  fold_ids <- seq(1, folds)
+  cv_results <- vector("list", length(ntree_seq))
+  registerDoParallel(cores = 10)
 
-      model_nosar <- fit_model(model, model_config, train_df, pred_vars_nosar, predict_var)
-      df[df['folds'] == fold, ]$PRED<- predict(model_nosar,  df[df['folds'] == fold, ])
+  print('running cv in parallel along ntree seq...')
+  cv_results <- foreach(ntree = ntree_seq, .packages = c("dplyr", "randomForest")) %dopar% {
 
+    preds <- numeric(nrow(df))
+    print(ntree)
+
+    for (fold in fold_ids) {
+      train_idx <- df$folds != fold
+      val_idx <- df$folds == fold
+
+      model_nosar <- fit_model(model, list(ntree=ntree), df[train_idx, ], pred_vars_nosar, predict_var)
+      preds[val_idx]<- predict(model_nosar,  df[val_idx, ])
     }
 
-    cv_results_n <- validate_ntree(df, predict_var)
-    cv_results_n$ntree <- ntree
-    cv_results <- rbind(cv_results, cv_results_n)
+    df$PRED <- preds
+    validate_ntree(df, predict_var) |> mutate(ntree=ntree)
   }
 
-  results <- cv_results |>
+  results <- bind_rows(cv_results) |>
     group_by(ntree) |>
-    summarise(tile_num=as.integer(tile_num), mean_RMSE=mean(RMSE, na.rm=TRUE), sd_RMSE=sd(RMSE, na.rm=TRUE)) |>
+    summarise(
+      tile_num=as.integer(tile_num),
+      mean_RMSE=mean(RMSE, na.rm=TRUE),
+      sd_RMSE=sd(RMSE, na.rm=TRUE)
+    ) |>
     ungroup()
 
   print(results)
