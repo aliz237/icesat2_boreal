@@ -543,60 +543,60 @@ run_modeling_pipeline_ntree <-function(rds_models, all_train_data, model, model_
   all_train_data_AGB <- GEDI2AT08AGB(rds_models, all_train_data, randomize=FALSE, max_samples, sample)
   print('setting up cv folds')
   df <- setup_kfold(all_train_data_AGB, folds)
+  gc()
 
-  ntree_seq <- seq(10, 500, 10)
+  ntree_seq <- seq(500, 50, -50) # 500 is (a bad) default
+  mtry_seq <- c(15, 10, 6, 3) # default is 6 (19 vars / 3 ~= 6)
+  nodesize_seq <- c(5, 10, 15, 20) # 5 is the default
+  grid <- expand.grid(ntree = ntree_seq, mtry = mtry_seq, nodesize = nodesize_seq)
+
   fold_ids <- seq(1, folds)
   cv_results <- vector("list", length(ntree_seq))
-  registerDoParallel(cores = 10)
+  registerDoParallel(cores = 20)
 
   print('running cv in parallel along ntree seq...')
-  cv_results <- foreach(ntree = ntree_seq, .packages = c("dplyr", "randomForest")) %dopar% {
-
+  cv_results <- foreach(i = seq_len(nrow(grid)), .packages = c("dplyr", "randomForest")) %dopar% {
     preds <- numeric(nrow(df))
-    print(ntree)
+    print(grid[i,])
+    ntree = grid[i, ]$ntree
+    mtry = grid[i, ]$mtry
+    nodesize = grid[i, ]$nodesize
 
     for (fold in fold_ids) {
       train_idx <- df$folds != fold
       val_idx <- df$folds == fold
 
-      model_nosar <- fit_model(model, list(ntree=ntree), df[train_idx, ], pred_vars_nosar, predict_var)
+      model_nosar <- fit_model(
+        model,
+        list(ntree = ntree, mtry = mtry, nodesize = nodesize),
+        df[train_idx, ],
+        pred_vars_nosar,
+        predict_var
+      )
       preds[val_idx]<- predict(model_nosar,  df[val_idx, ])
     }
 
     df$PRED <- preds
-    validate_ntree(df, predict_var) |> mutate(ntree=ntree)
+    validate_ntree(df, predict_var) |>
+      mutate(
+        ntree = ntree,
+        mtry = mtry,
+        nodesize = nodesize,
+        modelsize=as.integer(object.size(model_nosar))
+      )
   }
 
   results <- bind_rows(cv_results) |>
-    group_by(ntree) |>
+    group_by(ntree, mtry, nodesize) |>
     summarise(
       tile_num=as.integer(tile_num),
       mean_RMSE=mean(RMSE, na.rm=TRUE),
-      sd_RMSE=sd(RMSE, na.rm=TRUE)
+      sd_RMSE=sd(RMSE, na.rm=TRUE),
+      modelsize=first(modelsize)
     ) |>
     ungroup()
 
-  print(results)
-
-  relative_rmse_reduction_potential <- function (n, optimal_n=500) {
-    rn <- results[results$ntree==n, "mean_RMSE", drop=TRUE]
-    ro <- results[results$ntree==optimal_n, "mean_RMSE", drop=TRUE]
-    round((rn - ro) / rn * 100, 2)
-  }
-  abs_rmse_reduction_potential <- function (n, optimal_n=500) {
-    rn <- results[results$ntree==n, "mean_RMSE", drop=TRUE]
-    ro <- results[results$ntree==optimal_n, "mean_RMSE", drop=TRUE]
-    round(rn - ro, 2)
-  }
-  test_ntree <- c(10, 30, 50, 100, 150)
-  rmse_reduction_results <- data.frame(
-    ntree=test_ntree,
-    rrrp=as.vector(sapply(test_ntree, relative_rmse_reduction_potential)),
-    arrp=as.vector(sapply(test_ntree, abs_rmse_reduction_potential)),
-    tile_num=tile_num
-  )
-
-  return(list(ntree_results=results, rmse_reduction_results=rmse_reduction_results))
+  return(list(ntree_results=results))
 }
 
 plot_ntree_vs_rmse <- function(df){
@@ -679,14 +679,6 @@ mapBoreal<-function(atl08_path, broad_path, boreal_vector_path, year,
 
   output_fns <- set_output_file_names(predict_var, tile_num, year)
   write.csv(results[['ntree_results']], output_fns[['ntree']])
-  write.csv(results[['rmse_reduction_results']], output_fns[['rmse_reduction']])
-  ggsave(
-    output_fns[['rmse_ntree']],
-    plot = plot_ntree_vs_rmse(results[['ntree_results']]),
-    width = 7,
-    height = 5,
-    dpi = 300
-  )
   print('AGB successfully predicted!')
 }
 
