@@ -8,5 +8,5 @@ conda env create -f ${basedir}/above_env_r_3.1.4.yml
 pushd ${HOME}
 
 source activate r
-conda install -c conda-forge r-optparse -y
+conda install -c conda-forge r-optparse r-arrow -y
 
