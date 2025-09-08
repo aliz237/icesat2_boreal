@@ -570,6 +570,9 @@ rasterize_boundaries <- function(template, poly, layer_name, field=NULL){
   # rasterize poly using template raster to set dim, crs, res, ...
   # assumes poly is in EPSG 4326
   bbox_4326 <- terra::buffer(project(as.polygons(ext(template), crs(template)), 'EPSG:4326'), 1000)
+  if(!all(is.valid(poly))){
+    poly <- makeValid(poly)
+  }
   poly_cropped <- project(crop(poly, bbox_4326), crs(template))
 
   if (nrow(poly_cropped) == 0) {
