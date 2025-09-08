@@ -271,10 +271,10 @@ set_output_file_names <- function(predict_var, tile_num, year){
   )
 
   fn_suffix <- c('.tif', '_overall.csv', '_north.csv', '_boreal.csv', '_boreal_eco.csv',
-                 '_by_lc.csv', '_by_slope.csv','_by_ecoregion.csv',
+                 '_by_lc.csv', '_by_slope.csv','_by_ecoregion.csv','_fire.csv',
                  '_model_stats.csv', '_ensemble_stats.csv', '_val.csv', '_train.parquet')
   names <- c('map', 'overall', 'north', 'boreal', 'boreal_eco',
-             'by_lc', 'by_slope', 'by_ecoregion',
+             'by_lc', 'by_slope', 'by_ecoregion', 'fire',
              'model_stats', 'ensemble_stats', 'validation', 'training')
 
   output_file_names <- paste0(out_fn_stem, fn_suffix)
@@ -614,7 +614,7 @@ prep_summary_layers <- function(slope_raster, lc_raster, ecoregions, boreal_poly
   slope_lyr <- classify_slope(slope_raster, 'slope')
   names(lc_raster) <- 'lc'
   zones <- c(slope_lyr, lc_raster)
-  zones_info <- list(has_eco=FALSE, has_boreal=FALSE,
+  zones_info <- list(has_eco=FALSE, has_boreal=FALSE, has_fire=FALSE,
                      has_boreal_eco=FALSE, relative_to_north_lat=NULL)
   # slope_raster is only used as a template raster for the rasterizer
   # e.g, dims, res, crs, ...
@@ -683,7 +683,7 @@ calculate_zonal_summary <- function(map, zones, zones_info, agg_fun, cores, map_
         summary_fun('eco')
       else NULL
     },
-    by_fire = function(){
+    fire = function(){
       if(zones_info$has_fire)
         summary_fun('fire')
       else NULL
