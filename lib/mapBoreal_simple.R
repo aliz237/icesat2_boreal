@@ -610,7 +610,7 @@ clip_to_north_lat <- function(template, north_lat=51.6){
               relative_to_north_lat=relative_to_north_lat))
 }
 
-prep_summary_layers <- function(slope_raster, lc_raster, ecoregions, boreal_poly){
+prep_summary_layers <- function(slope_raster, lc_raster, ecoregions, boreal_poly, fire_poly){
   slope_lyr <- classify_slope(slope_raster, 'slope')
   names(lc_raster) <- 'lc'
   zones <- c(slope_lyr, lc_raster)
@@ -628,6 +628,12 @@ prep_summary_layers <- function(slope_raster, lc_raster, ecoregions, boreal_poly
   if (any(!is.na(values(boreal_lyr)))){
     zones <- c(zones, boreal_lyr)
     zones_info$has_boreal <- TRUE
+  }
+
+  fire_lyr <- rasterize_boundaries(slope_raster, fire_poly, 'fire', field='GID')
+  if (any(!is.na(values(fire_lyr)))){
+    zones <- c(zones, fire_lyr)
+    zones_info$has_fire <- TRUE
   }
 
   if (zones_info$has_eco && zones_info$has_boreal){
@@ -675,6 +681,11 @@ calculate_zonal_summary <- function(map, zones, zones_info, agg_fun, cores, map_
     by_ecoregion = function(){
       if(zones_info$has_eco)
         summary_fun('eco')
+      else NULL
+    },
+    by_fire = function(){
+      if(zones_info$has_fire)
+        summary_fun('fire')
       else NULL
     },
     boreal = function(){
@@ -969,6 +980,7 @@ mapBoreal <- function(atl08_path,
                       lc_path,
                       boreal_vector_path,
                       ecoregions_path,
+                      fire_polygons_path,
                       biomass_models_path,
                       year,
                       sar_path=NULL,
@@ -1002,14 +1014,17 @@ mapBoreal <- function(atl08_path,
   stack <- resample_reproject_and_mask(topo_path, hls_path, lc_path, pred_vars, mask, sar_path)
   boreal_poly <- vect(boreal_vector_path)
   ecoregions <- vect(ecoregions_path)
+  fire_poly <- vect(fire_polygons_path)
   zones <- prep_summary_layers(
     stack[['slope']],
     stack[['esa_worldcover_v100_2020']],
     ecoregions,
-    boreal_poly
+    boreal_poly,
+    fire_poly
   )
   # there are rge objects and now rasterized in zones layers above
   rm(boreal_poly)
+  rm(fire_poly)
   rm(ecoregions)
   biomass_models <- get_biomass_models(biomass_models_path)
   output_fns <- set_output_file_names(predict_var, tile_num, year)
@@ -1112,6 +1127,10 @@ option_list <- list(
   make_option(
     c("--ecoregions_path"), type = "character",
     help = "Path to the ecoregions vector file",
+    ),
+  make_option(
+    c("--fire_polygons_path"), type = "character",
+    help = "Path to the NRCan fire polygons vector file",
     ),
   make_option(
     c("--biomass_models_path"), type = "character",
