@@ -227,9 +227,9 @@ remove_height_outliers <- function(all_train_data){
   return(
   all_train_data |>
     group_by(segment_landcover) |>
-    summarise(thresh=mean(h_canopy, na.rm=T) + 3 * sd(h_canopy, na.rm=T)) |>
+    summarise(thresh=mean(RH_98, na.rm=T) + 3 * sd(RH_98, na.rm=T)) |>
     right_join(all_train_data, by='segment_landcover') |>
-    filter(h_canopy <= thresh)
+    filter(RH_98 <= thresh)
   )
 }
 
@@ -393,7 +393,7 @@ augment_training_data_with_broad_data <- function(tile_data, ice2_30_sample_path
 
 reformat_training_data_for_AGB_modeling <- function(tile_data, offset){
   tile_data <- rename_height_columns_to_match_pretrained_models(tile_data)
-  tile_data$h_canopy <- tile_data$RH_98
+  tile_data$h_canopy <- tile_data$RH_50
   tile_data <- offset_RH_columns(tile_data, offset)
   tile_data <- set_model_id_for_AGB_prediction(tile_data)
   return(tile_data)
