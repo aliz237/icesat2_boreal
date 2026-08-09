@@ -62,9 +62,9 @@ set_model_id_for_AGB_prediction <- function(in_data, offset){
   return(
     in_data |>
       mutate(model_id = case_when(
-        segment_landcover %in% c(111, 113, 121, 123) ~ "m3", # needle leaf
-        segment_landcover %in% c(112, 114, 122, 124) ~ "m1", # broad leaf
-        TRUE ~ "m8"
+        segment_landcover %in% c(111, 113, 121, 123) ~ "ENT", # needle leaf
+        segment_landcover %in% c(112, 114, 122, 124) ~ "DBT", # broad leaf
+        TRUE ~ "WORLD"
       )
       )
   )
@@ -487,9 +487,25 @@ train_test_split_if_enough_data <- function(df, year, val_thresh, val_frac){
 get_biomass_models <- function(biomass_models_path){
   base_dir <- dirname(biomass_models_path)
   untar(biomass_models_path, exdir=base_dir)
-  biomass_model_fns <- list.files(path=base_dir, pattern='*.rds', full.names=TRUE)
+  biomass_model_fns <- list.files(path=base_dir, pattern='\\.rds$', full.names=TRUE)
+  model_names <- character(length(biomass_model_fns))
+  for (i in seq_along(biomass_model_fns)) {
+    fn <- basename(biomass_model_fns[i])
+    if (startsWith(fn, 'predict_DBT_US_fit')){
+        model_names[i] <- 'DBT'
+    }
+    else if (startsWith(fn, 'predict_ENT_US_fit')){
+        model_names[i] <- 'ENT'
+    }
+    else if (startsWith(fn, 'predict_world_coarse_fit')){
+        model_names[i] <- 'WORLD'
+    }
+    else{
+        model_names[i] <- 'NOT_USED'
+    }
+  }
   biomass_models <- lapply(biomass_model_fns, readRDS)
-  names(biomass_models) <- paste0("m",1:length(biomass_models))
+  names(biomass_models) <- model_names
   print(biomass_models)
   return(biomass_models)
 }
